@@ -275,7 +275,8 @@ function selectStop(s, { pan = true } = {}) {
 function stopTitle(s) {
   const fav = isFav(s);
   return `<div class="stop-title"><div class="title">${esc(s.name)} <span class="code">#${esc(s.code || s.id)} · ${esc(nameOf(s.agency))}</span></div>
-    <button class="star" type="button" data-star aria-label="${fav ? '取消收藏' : '收藏'}" title="${fav ? '取消收藏' : '收藏'}">${fav ? '★' : '☆'}</button></div>`;
+    <button class="star" type="button" data-star aria-label="${fav ? '取消收藏' : '收藏'}" title="${fav ? '取消收藏' : '收藏'}">${fav ? '★' : '☆'}</button></div>
+    <div><button class="link-btn" type="button" data-planfrom>从这里出发</button> · <button class="link-btn" type="button" data-planto>到这里去</button></div>`;
 }
 
 async function loadArrivals() {
@@ -309,7 +310,12 @@ function toggleFav(s) {
   const btn = $('#arrivals [data-star]');
   if (btn && selectedStop) { const f = isFav(selectedStop); btn.textContent = f ? '★' : '☆'; btn.title = btn.ariaLabel = f ? '取消收藏' : '收藏'; }
 }
-$('#arrivals').addEventListener('click', e => { if (e.target.closest('[data-star]') && selectedStop) toggleFav(selectedStop); });
+$('#arrivals').addEventListener('click', e => {
+  if (!selectedStop) return;
+  if (e.target.closest('[data-star]')) toggleFav(selectedStop);
+  else if (e.target.closest('[data-planfrom]')) planFromStop(selectedStop, 'from');
+  else if (e.target.closest('[data-planto]')) planFromStop(selectedStop, 'to');
+});
 
 function stopRow(s, i, extra = '') {
   return `<li data-i="${i}" data-key="${esc(favKey(s))}">

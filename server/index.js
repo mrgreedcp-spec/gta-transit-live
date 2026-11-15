@@ -4,6 +4,8 @@ import path from 'node:path';
 import os from 'node:os';
 import zlib from 'node:zlib';
 import { handleAuth, authEnabled } from './auth.js';
+import { plan, geocode, plannerUsage } from './planner.js';
+import { take, clientKey } from './ratelimit.js';
 import { AGENCIES, byId } from './agencies.js';
 import { getFeed, feedStatus, vehiclesOf, arrivalsAt, tripDelays, routeStyle } from './realtime.js';
 import { store, loadStatic, staticStatus, searchStops, stopsNear, stopsInBbox } from './static.js';
@@ -121,7 +123,23 @@ const isLocalReq = req => !process.env.RENDER && !req.headers['x-forwarded-for']
 
 async function handleApi(url, res, req) {
   const p = url.pathname, q = url.searchParams;
-  if (p === '/api/status') return send(res, 200, await apiStatus());
+  const who = clientKey(req);
+  const limited = kind => { const wait = take(kind, who); if (!wait) return false; res.setHeader('retry-after', String(wait)); send(res, 429, { error: 'rate_limited', retryAfter: wait }); return true; };
+  if (limited('api')) return;
+  if (p === '/api/status') return send(res, 200, { ...(await apiStatus()), planner: plannerUsage() });
+  if (p === '/api/plan') {
+    const pt = v => { const a = (v || '').split(',').map(Number); return a.length === 2 && a.every(Number.isFinite) ? a : null; };
+    const from = pt(q.get('from')), to = pt(q.get('to'));
+    if (!from || !to) return send(res, 400, { error: 'from/to = lat,lon' });
+    if (limited('plan')) return;
+    return send(res, 200, await plan({ from, to, time: +q.get('time') || null, arriveBy: q.get('arriveBy') === '1' }));
+  }
+  if (p === '/api/geocode') {
+    const text = (q.get('q') || '').trim().slice(0, 100);
+    if (text.length < 2) return send(res, 200, []);
+    if (limited('geo')) return;
+    try { return send(res, 200, await geocode(text)); } catch (e) { return send(res, 502, { error: e.message }); }
+  }
   if (p === '/api/vehicles') return send(res, 200, await apiVehicles(q.get('agencies'), q.get('bbox')));
   if (p === '/api/stops/near') {
     const lat = +q.get('lat'), lon = +q.get('lon');

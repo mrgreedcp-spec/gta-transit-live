@@ -52,12 +52,28 @@
 <aside id="drawer" class="half">
   <div id="handle" aria-label="展开或收起"><span></span></div>
   <nav id="tabs">
+    <button type="button" data-tab="plan">路线</button>
     <button type="button" data-tab="near">附近</button>
     <button type="button" data-tab="favs">收藏</button>
     <button type="button" data-tab="stop">到站</button>
     <button type="button" data-tab="status">状态</button>
   </nav>
   <div id="panes">
+    <section data-pane="plan">
+      <div class="plan-form">
+        <div class="pf-row"><span class="pf-dot from"></span><input id="planFrom" autocomplete="off" placeholder="起点：地点、站名，或点「我的位置」"><button id="planSwap" type="button" class="icon-btn" title="交换起终点" aria-label="交换起终点">⇅</button></div>
+        <ul class="pf-sug" id="sugFrom"></ul>
+        <div class="pf-row"><span class="pf-dot to"></span><input id="planTo" autocomplete="off" placeholder="终点：地点或站名"></div>
+        <ul class="pf-sug" id="sugTo"></ul>
+        <div class="pf-row pf-opts">
+          <select id="planWhen"><option value="now">现在出发</option><option value="depart">出发时间</option><option value="arrive">到达时间</option></select>
+          <input id="planTime" type="datetime-local" hidden>
+          <button id="planGo" type="button" class="primary">规划</button>
+        </div>
+      </div>
+      <div id="planResults"></div>
+      <p class="foot">路线数据：<a href="https://transitous.org/sources/" target="_blank" rel="noopener">Transitous 数据来源</a> · © OpenStreetMap contributors。实时修正来自各机构开放数据。</p>
+    </section>
     <section data-pane="near">
       <div id="nearHead" class="hint">点地图右下角 ◎ 定位，查看附近站点和下一班。</div>
       <button id="nearCenter" class="link-btn" type="button">用地图中心查附近</button>
@@ -84,5 +100,6 @@
 
 <script src="/leaflet/leaflet.js"></script>
 <script src="/app.js"></script>
+<script src="/plan.js"></script>
 </body>
 </html>

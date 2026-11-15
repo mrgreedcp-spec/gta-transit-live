@@ -1,9 +1,9 @@
 // 外壳缓存：网络优先，3 秒超时或失败时用缓存。/api/ 和跨域（地图瓦片）不处理。
 // 改了前端文件就把 VERSION 加 1。
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `gta-shell-${VERSION}`;
 const SHELL = [
-  '/', '/app.js', '/style.css', '/manifest.webmanifest',
+  '/', '/app.js', '/plan.js', '/style.css', '/manifest.webmanifest',
   '/leaflet/leaflet.js', '/leaflet/leaflet.css',
   '/leaflet/images/marker-icon.png', '/leaflet/images/marker-icon-2x.png', '/leaflet/images/marker-shadow.png',
   '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png',

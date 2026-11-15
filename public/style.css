@@ -105,6 +105,33 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
 .leaflet-control-locate.busy a { color: #aaa; }
 .veh-pop b { font-size: 14px; }
 
+/* ---------- 路线规划 ---------- */
+.plan-form { position: relative; }
+.pf-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.pf-row input, .pf-row select { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid #d0d5da; border-radius: 8px; font: inherit; background: #fff; }
+.pf-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.pf-dot.from { background: #2e9e44; } .pf-dot.to { background: #d6302a; }
+.icon-btn { width: 36px; height: 36px; border: 1px solid #d0d5da; background: #fff; border-radius: 8px; cursor: pointer; flex: none; }
+.primary { background: #0a66c2; color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; flex: none; }
+.pf-opts select { flex: none; width: auto; }
+.pf-sug { list-style: none; margin: 0 0 0 18px; padding: 0; border-radius: 8px; box-shadow: 0 4px 14px #0002; background: #fff; max-height: 240px; overflow-y: auto; }
+.pf-sug:empty { display: none; }
+.pf-sug li { padding: 8px 10px; min-height: 40px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
+.pf-sug li:hover { background: #f4f6f8; }
+.it-card { border: 1px solid #e3e6ea; border-radius: 10px; padding: 9px 10px; margin-top: 8px; cursor: pointer; }
+.it-card.on { border-color: #0a66c2; box-shadow: 0 0 0 1px #0a66c2; }
+.it-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 700; }
+.it-head .dur { font-weight: 400; color: #666; font-size: 12px; }
+.it-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin: 6px 0 2px; font-size: 12px; color: #888; }
+.it-legs { display: none; margin-top: 6px; font-size: 13px; }
+.it-card.on .it-legs { display: block; }
+.leg { padding: 5px 0 5px 10px; border-left: 3px solid #ccc; margin: 3px 0; }
+.leg .t { font-weight: 600; }
+.conn { font-size: 12px; padding: 3px 8px; border-radius: 10px; display: inline-block; margin: 2px 0 2px 10px; }
+.conn.ok { background: #e3f4e6; color: #1a7f37; } .conn.tight { background: #fff4d6; color: #8a6100; } .conn.miss { background: #fde3e2; color: #b42318; }
+.rt { font-size: 11px; color: #1a7f37; } .rt.late { color: #d6302a; }
+.gmaps { display: inline-block; margin-top: 10px; font-size: 13px; color: #0a66c2; }
+
 /* ---------- 手机 ---------- */
 @media (max-width: 760px) {
   #searchBox { left: 10px; right: 84px; width: auto; }
