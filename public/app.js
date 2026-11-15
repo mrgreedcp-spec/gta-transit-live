@@ -268,6 +268,7 @@ function selectStop(s, { pan = true } = {}) {
   stopPin = L.marker([s.lat, s.lon]).addTo(map);
   if (pan) map.setView([s.lat, s.lon], Math.max(map.getZoom(), 16));
   $('#arrivals').innerHTML = `${stopTitle(s)}<div class="empty">实时到站加载中…</div>`;
+  $('#remindForm').innerHTML = '';
   showTab('stop');
   loadArrivals();
 }
@@ -276,7 +277,7 @@ function stopTitle(s) {
   const fav = isFav(s);
   return `<div class="stop-title"><div class="title">${esc(s.name)} <span class="code">#${esc(s.code || s.id)} · ${esc(nameOf(s.agency))}</span></div>
     <button class="star" type="button" data-star aria-label="${fav ? '取消收藏' : '收藏'}" title="${fav ? '取消收藏' : '收藏'}">${fav ? '★' : '☆'}</button></div>
-    <div><button class="link-btn" type="button" data-planfrom>从这里出发</button> · <button class="link-btn" type="button" data-planto>到这里去</button></div>`;
+    <div><button class="link-btn" type="button" data-remind>🔔 提醒我</button> · <button class="link-btn" type="button" data-planfrom>从这里出发</button> · <button class="link-btn" type="button" data-planto>到这里去</button></div>`;
 }
 
 async function loadArrivals() {
@@ -315,6 +316,7 @@ $('#arrivals').addEventListener('click', e => {
   if (e.target.closest('[data-star]')) toggleFav(selectedStop);
   else if (e.target.closest('[data-planfrom]')) planFromStop(selectedStop, 'from');
   else if (e.target.closest('[data-planto]')) planFromStop(selectedStop, 'to');
+  else if (e.target.closest('[data-remind]')) openRemindForm(selectedStop);
 });
 
 function stopRow(s, i, extra = '') {
@@ -499,6 +501,16 @@ async function tick() {
   $('#logout').hidden = false;
   tick();
   loadStops().catch(() => {});
+  // 从通知点进来：/?stop=agency:id
+  const sp = new URLSearchParams(location.search).get('stop');
+  if (sp && sp.includes(':')) {
+    const [ag, id] = [sp.slice(0, sp.indexOf(':')), sp.slice(sp.indexOf(':') + 1)];
+    api(`/api/stops/search?q=${encodeURIComponent(id)}&agencies=${ag}&limit=5`).then(l => {
+      const s = l.find(x => x.id === id) || l[0];
+      if (s) selectStop(s);
+      history.replaceState(null, '', '/');
+    }).catch(() => {});
+  }
   setInterval(tick, REFRESH_MS);
 })();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });

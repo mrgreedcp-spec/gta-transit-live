@@ -6,6 +6,14 @@ import zlib from 'node:zlib';
 import { handleAuth, authEnabled } from './auth.js';
 import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
+import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest } from './push.js';
+import { kvStatus } from './kv.js';
+
+async function readJson(req, limit = 16384) {
+  let data = '';
+  for await (const chunk of req) { data += chunk; if (data.length > limit) throw Object.assign(new Error('body_too_large'), { code: 413 }); }
+  try { return JSON.parse(data || '{}'); } catch { throw Object.assign(new Error('bad_json'), { code: 400 }); }
+}
 import { AGENCIES, byId } from './agencies.js';
 import { getFeed, feedStatus, vehiclesOf, arrivalsAt, tripDelays, routeStyle } from './realtime.js';
 import { store, loadStatic, staticStatus, searchStops, stopsNear, stopsInBbox } from './static.js';
@@ -126,7 +134,21 @@ async function handleApi(url, res, req) {
   const who = clientKey(req);
   const limited = kind => { const wait = take(kind, who); if (!wait) return false; res.setHeader('retry-after', String(wait)); send(res, 429, { error: 'rate_limited', retryAfter: wait }); return true; };
   if (limited('api')) return;
-  if (p === '/api/status') return send(res, 200, { ...(await apiStatus()), planner: plannerUsage() });
+  if (p === '/api/status') return send(res, 200, { ...(await apiStatus()), planner: plannerUsage(), push: { ...pushState }, kv: kvStatus() });
+  if (p.startsWith('/api/push/')) {
+    const m = req.method;
+    try {
+      if (p === '/api/push/key') return send(res, 200, { publicKey: vapidPublicKey(), enabled: pushState.enabled, reason: pushState.reason });
+      if (m !== 'GET' && limited('write')) return;
+      if (p === '/api/push/subscribe' && m === 'POST') { const b = await readJson(req); return send(res, 200, await subscribe(b.sub || {}, b.lang)); }
+      if (p === '/api/push/subscribe' && m === 'DELETE') { await unsubscribe(q.get('id')); return send(res, 200, { ok: true }); }
+      if (p === '/api/push/rules' && m === 'GET') { const r = getRules(q.get('id')); return r ? send(res, 200, r) : send(res, 404, { error: 'unknown_device' }); }
+      if (p === '/api/push/rules' && m === 'POST') { const b = await readJson(req); return send(res, 200, await addRule(b.id, b.rule || {})); }
+      if (p === '/api/push/rules' && m === 'DELETE') { await deleteRule(q.get('id'), q.get('rule')); return send(res, 200, { ok: true }); }
+      if (p === '/api/push/test' && m === 'POST') { const b = await readJson(req); await sendTest(b.id); return send(res, 200, { ok: true }); }
+    } catch (e) { return send(res, e.code || 500, { error: e.message }); }
+    return send(res, 404, { error: 'not found' });
+  }
   if (p === '/api/plan') {
     const pt = v => { const a = (v || '').split(',').map(Number); return a.length === 2 && a.every(Number.isFinite) ? a : null; };
     const from = pt(q.get('from')), to = pt(q.get('to'));
@@ -218,8 +240,13 @@ http.createServer(async (req, res) => {
   }
   console.log(`网络代理：${process.env.HTTPS_PROXY || process.env.https_proxy || '无（直连）'}`);
   console.log(`访问密码：${authEnabled ? '已启用' : '未启用'}`);
+  console.log(`存储：${kvStatus().kind}${kvStatus().persistent ? '' : '（非持久）'}`);
   console.log(`GO API key：${goKey() ? '已配置' : '未配置（GO 只显示静态站点）'}`);
 });
+
+// 推送提醒：用和到站接口相同的逻辑取到站
+initPush(async (agency, stopId) => (await apiArrivals(agency, stopId, { limit: 15, maxWaitMs: 8000 }))[1].arrivals || [])
+  .catch(e => console.warn('[push] 初始化失败', e.message));
 
 // 后台加载静态 GTFS（并发 3）
 (async () => {

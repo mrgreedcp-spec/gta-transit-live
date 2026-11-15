@@ -23,6 +23,22 @@ npm start
 - 抽屉（手机在底部，可拖动；桌面在左侧）：附近 / 收藏 / 到站 / 状态。
 - 晚点来源：MiWay、YRT 来自 TripUpdates；GO 来自 ServiceataGlance；Brampton 源不带晚点（灰色）。
 
+## 路线规划
+
+- 「路线」标签：起终点可选「我的位置」「地图中心」、地名（Transitous 地理编码）或站点；可选出发/到达时间。
+- 规划服务：[Transitous](https://transitous.org/api/)（MOTIS 2，社区免费服务）。条件：项目开源、非商业、`/plan` 每天少于 720 次。本项目默认每天最多 600 次（`PLANNER_DAILY_MAX`），`PLANNER=off` 可关闭。
+- 结果叠加本地实时数据：每程显示实时上下车时间与晚点；换乘处判断「来得及（≥3 分）/ 紧张（0–3 分）/ 可能赶不上」，赶不上时给出同站同线下一班。
+- 没有结果、额度用完或服务不可用时，改为「在 Google 地图里打开」。
+- 数据来源署名：https://transitous.org/sources/ 与 OpenStreetMap。
+
+## 到站推送提醒
+
+- 到站页点「🔔 提醒我」：选线路（或任意）、提前几分钟、星期、时间段（多伦多时间）、是否只提醒一次。
+- 「收藏」页顶部管理提醒，可发送测试通知。
+- 需要：HTTPS（云端地址）；iPhone 先「添加到主屏幕」再从主屏打开（iOS 16.4+）；服务器配置 VAPID 密钥和 Upstash。
+- 服务端每 30 秒检查一次正在生效的规则；同一班车只推一次。服务器休眠时不推送，所以云端要配保活 ping。
+- 规则按设备保存（每台设备最多 10 条）。本地开发自动生成 `data/vapid.json`，存储用 `data/kv.json`。
+
 ## 云端部署（Render 免费版）
 
 代码在私有仓库 `mrgreedcp-spec/gta-transit-live`，根目录有 `render.yaml`。
@@ -32,6 +48,18 @@ npm start
 3. 弹框里填：`APP_PASSWORD`（访问密码，自己定）；`GO_API_KEY`（没有就留空）。
 4. 点 Apply，等首次构建（约 3–6 分钟，构建时会预下载全部时刻表）。
 5. 打开 `https://gta-transit-live.onrender.com`（以 Render 显示的地址为准），输入密码。
+
+环境变量（Render → 服务 → Environment）：
+
+| 变量 | 用途 | 必填 |
+|---|---|---|
+| `APP_PASSWORD` | 访问密码 | 建议 |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | 持久存储（推送提醒） | 推送需要 |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Web Push 密钥（`npx web-push generate-vapid-keys` 生成，固定不变） | 推送需要 |
+| `GO_API_KEY` | GO 实时 | 可选 |
+| `PLANNER` / `PLANNER_DAILY_MAX` / `PLANNER_CONTACT` | 规划服务开关、每日上限、User-Agent 联系方式 | 可选 |
+
+保活：在 cron-job.org 或 UptimeRobot 建一个每 10 分钟访问 `https://<你的地址>/healthz` 的任务（推送提醒需要服务器醒着）。
 
 说明：
 - 免费版 15 分钟无访问会休眠，下次打开约 1 分钟唤醒，页面会显示「服务唤醒中」。
@@ -97,6 +125,9 @@ npm start
 | `/api/stops/near?lat=43.593&lon=-79.642&radius=800` | 附近站点（按距离） |
 | `/api/stops/bbox?w=&s=&e=&n=&limit=300` | 视野内站点 |
 | `/healthz` | 健康检查（不需登录） |
+| `/api/plan?from=lat,lon&to=lat,lon&time=&arriveBy=1` | 路线规划（Transitous + 实时衔接） |
+| `/api/geocode?q=` | 地名搜索 |
+| `/api/push/key` `/api/push/subscribe` `/api/push/rules` `/api/push/test` | 推送提醒 |
 | `/api/stops/<机构>/<stop_id>/arrivals` | 某站未来 90 分钟实时到站 |
 | `/api/arrivals?s=miway:0085&s=brampton:00045505&limit=2` | 批量到站（收藏列表用，最多 30 站） |
 | `/api/go/union` `/api/go/alerts` | GO Union 发车 / 服务公告（需 key） |
@@ -111,6 +142,11 @@ npm start
 - `server/go.js` GO OpenDataAPI
 - `server/index.js` HTTP 服务（gzip、路由）
 - `server/auth.js` 访问密码（APP_PASSWORD）
+- `server/planner.js` 路线规划与换乘衔接
+- `server/push.js` 推送提醒（Web Push + 定时检查）
+- `server/kv.js` 存储（Upstash 或本地文件）
+- `server/ratelimit.js` 限流
+- `public/plan.js` `public/push.js` 路线与提醒前端
 - `scripts/prefetch-static.js` 构建时预下载时刻表
 - `render.yaml` Render 部署配置
 - `public/` 前端（Leaflet）
