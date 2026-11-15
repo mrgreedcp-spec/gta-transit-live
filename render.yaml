@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: gta-transit-live
+    runtime: node
+    plan: free
+    region: ohio
+    buildCommand: npm ci && npm run prefetch
+    startCommand: node server/index.js
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: NODE_VERSION
+        value: "24"
+      - key: STATIC_MAX_AGE_DAYS
+        value: "30"
+      - key: APP_PASSWORD
+        sync: false
+      - key: GO_API_KEY
+        sync: false

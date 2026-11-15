@@ -1,0 +1,16 @@
+{
+  "name": "GTA 公交实时",
+  "short_name": "GTA公交",
+  "description": "多伦多地区公交实时地图与收藏站点到站",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fafafa",
+  "theme_color": "#0a66c2",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

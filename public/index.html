@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GTA 公交实时</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0a66c2">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="GTA公交">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/leaflet/leaflet.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main id="map"></main>
+
+<!-- 顶部：站点搜索 -->
+<div id="searchBox" class="float">
+  <input id="stopSearch" type="search" enterkeyhint="search" autocomplete="off" placeholder="搜索站点：名称或站号">
+  <ul id="stopResults"></ul>
+</div>
+
+<!-- 右上：筛选 -->
+<button id="filterBtn" class="float pill" type="button">筛选 <b>+</b></button>
+<div id="filterPanel" class="float" hidden>
+  <div class="fp-row">
+    <label class="switch"><input type="checkbox" id="busGate"> 缩小时只显示火车（放大到 12 级显示公交）</label>
+    <label class="switch"><input type="checkbox" id="showStops"> 放大后显示站点</label>
+  </div>
+  <div id="routeChips"></div>
+</div>
+
+<!-- 左下：晚点图例 -->
+<div id="legend" class="float">
+  <button id="legendToggle" type="button" aria-label="图例">图例</button>
+  <ul>
+    <li><i class="ring d-early"></i>提前</li>
+    <li><i class="ring d-ok"></i>准点 · 晚 0–2 分</li>
+    <li><i class="ring d-warn"></i>晚 3–4 分</li>
+    <li><i class="ring d-late"></i>晚 5 分以上</li>
+    <li><i class="ring d-none"></i>无晚点数据</li>
+  </ul>
+</div>
+
+<div id="banner" hidden></div>
+
+<!-- 抽屉：手机在底部，桌面在左侧 -->
+<aside id="drawer" class="half">
+  <div id="handle" aria-label="展开或收起"><span></span></div>
+  <nav id="tabs">
+    <button type="button" data-tab="near">附近</button>
+    <button type="button" data-tab="favs">收藏</button>
+    <button type="button" data-tab="stop">到站</button>
+    <button type="button" data-tab="status">状态</button>
+  </nav>
+  <div id="panes">
+    <section data-pane="near">
+      <div id="nearHead" class="hint">点地图右下角 ◎ 定位，查看附近站点和下一班。</div>
+      <button id="nearCenter" class="link-btn" type="button">用地图中心查附近</button>
+      <ul id="nearList" class="stop-list"></ul>
+    </section>
+    <section data-pane="favs">
+      <div class="sec-head"><span class="hint" id="favHint"></span><button id="favEdit" class="link-btn" type="button" hidden>编辑</button></div>
+      <ul id="favList" class="stop-list"></ul>
+    </section>
+    <section data-pane="stop">
+      <div id="arrivals"><div class="hint">在地图上点站点，或搜索站点。</div></div>
+    </section>
+    <section data-pane="status">
+      <div id="agencies"></div>
+      <div id="vehCount" class="hint"></div>
+      <div id="goExtra" hidden>
+        <h3>GO：Union 发车</h3><div id="goUnion"></div>
+        <h3>GO 公告</h3><div id="goAlerts"></div>
+      </div>
+      <p class="foot">每 20 秒刷新。数据：TTC、Metrolinx、MiWay、Brampton、YRT、Durham 开放数据。Data used in this product or service is provided with the permission of Metrolinx.<br>本 app 为个人非官方项目，与 Metrolinx、GO Transit、TTC 等运营方无关。<br><a href="/logout" id="logout" hidden>退出登录</a></p>
+    </section>
+  </div>
+</aside>
+
+<script src="/leaflet/leaflet.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

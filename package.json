@@ -1,0 +1,19 @@
+{
+  "name": "gta-transit-live",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "NODE_USE_ENV_PROXY=1 node server/index.js",
+    "phone": "HOST=0.0.0.0 NODE_USE_ENV_PROXY=1 node server/index.js",
+    "prefetch": "node scripts/prefetch-static.js"
+  },
+  "dependencies": {
+    "gtfs-realtime-bindings": "^2.2.0",
+    "leaflet": "^1.9.4",
+    "yauzl": "^3.4.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
