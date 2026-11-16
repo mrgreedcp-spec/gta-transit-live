@@ -132,7 +132,7 @@ async function apiTrip(agencyId, tripIdRaw, q) {
         routeKey ||= tu.trip?.routeId || null;
         if (!shape && tripId) shape = shapeOf(st, tripId);
         ({ stops, passedCount } = tripStops(tu, st, t));
-        if (stops.length) stopsSource = 'realtime'; else note = '这趟车的预测站点都已过站。';
+        if (stops.length) stopsSource = 'realtime'; else note = passedCount ? '这趟车的预测站点都已过站。' : '这趟车暂时没有逐站预测。';
       } else note = s?.feed ? '这趟车暂时没有逐站预测。' : `${a.name} 实时到站暂不可用：${s?.error || '加载中'}`;
     } else note = `${a.name} 不提供逐站预测。`;
   }
