@@ -30,5 +30,7 @@ services:
         sync: false
       - key: VAPID_PRIVATE_KEY
         sync: false
+      - key: NOTIFY_SECRET
+        sync: false
       - key: VAPID_SUBJECT
         value: https://github.com/mrgreedcp-spec/gta-transit-live

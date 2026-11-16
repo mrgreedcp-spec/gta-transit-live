@@ -108,12 +108,12 @@ export async function deleteRule(id, ruleId) {
   await saveDevice(id);
 }
 
-async function send(id, payload) {
+async function send(id, payload, ttl = 120) {
   const d = devices.get(id);
   if (!d) return false;
   try {
     await webpush.sendNotification(d.sub, JSON.stringify(payload), {
-      TTL: 120, urgency: 'high', timeout: 10000,
+      TTL: ttl, urgency: 'high', timeout: 10000,
       ...(process.env.HTTPS_PROXY && !process.env.RENDER ? { proxy: process.env.HTTPS_PROXY } : {}),
     });
     pushState.sent++;
@@ -130,6 +130,19 @@ export async function sendTest(id) {
   const zh = devices.get(id).lang !== 'en';
   const ok = await send(id, { title: zh ? 'GTA 公交实时' : 'GTA Transit Live', body: zh ? '测试通知：推送提醒已开通 ✅' : 'Test: reminders are on ✅', tag: 'test' });
   if (!ok) throw Object.assign(new Error(pushState.lastError || 'send_failed'), { code: 502 });
+}
+
+// 外部提醒（POST /api/notify，见 index.js）：发给全部设备。key 用于去重，同一 key 6 小时内只发一次。
+const notified = new Map();
+export async function notifyAll({ title, body, tag, key }) {
+  if (!ready) throw Object.assign(new Error(pushState.reason || 'push_disabled'), { code: 503 });
+  const now = Date.now();
+  for (const [k, t] of notified) if (now - t > 6 * 3600e3) notified.delete(k);
+  if (key && notified.has(key)) return { devices: devices.size, sent: 0, duplicate: true };
+  let sent = 0;
+  for (const id of [...devices.keys()]) if (await send(id, { title, body, tag, url: '/' }, 1800)) sent++;
+  if (key && sent) notified.set(key, now);
+  return { devices: devices.size, sent };
 }
 
 // ---------- 定时检查 ----------

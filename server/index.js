@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -6,7 +7,7 @@ import zlib from 'node:zlib';
 import { handleAuth, authEnabled } from './auth.js';
 import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
-import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest } from './push.js';
+import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll } from './push.js';
 import { kvStatus } from './kv.js';
 
 async function readJson(req, limit = 16384) {
@@ -251,6 +252,24 @@ async function handleApi(url, res, req) {
   send(res, 404, { error: 'not found' });
 }
 
+// 外部提醒：本机脚本带 x-notify-key（= 环境变量 NOTIFY_SECRET）调用，推给全部设备。未设 NOTIFY_SECRET 时接口不存在。
+async function handleNotify(req, res) {
+  const secret = process.env.NOTIFY_SECRET;
+  if (!secret) return send(res, 404, { error: 'not found' });
+  if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
+  const wait = take('write', clientKey(req));
+  if (wait) { res.setHeader('retry-after', String(wait)); return send(res, 429, { error: 'rate_limited', retryAfter: wait }); }
+  const got = Buffer.from(String(req.headers['x-notify-key'] || '')), want = Buffer.from(secret);
+  if (!got.length) return send(res, 401, { error: 'unauthorized' });
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return send(res, 403, { error: 'forbidden' });
+  try {
+    const b = await readJson(req, 2048);
+    const body = String(b.body || '').trim().slice(0, 300);
+    if (!body) return send(res, 400, { error: 'body_required' });
+    return send(res, 200, await notifyAll({ title: String(b.title || '通勤提醒').slice(0, 60), body, tag: String(b.tag || 'notify').slice(0, 40), key: String(b.key || '').slice(0, 80) }));
+  } catch (e) { return send(res, e.code || 500, { error: e.message }); }
+}
+
 async function serveFile(url, res) {
   for (const [prefix, dir] of Object.entries(STATIC_DIRS)) {
     if (!url.pathname.startsWith(prefix)) continue;
@@ -273,6 +292,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
     if (url.pathname === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('ok'); }
+    if (url.pathname === '/api/notify') return await handleNotify(req, res);
     if (await handleAuth(req, res, url)) return;
     if (url.pathname.startsWith('/api/')) await handleApi(url, res, req);
     else await serveFile(url, res);
