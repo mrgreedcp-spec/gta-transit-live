@@ -7,7 +7,7 @@ import zlib from 'node:zlib';
 import { handleAuth, authEnabled } from './auth.js';
 import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
-import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll } from './push.js';
+import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow } from './push.js';
 import { kvStatus } from './kv.js';
 
 async function readJson(req, limit = 16384) {
@@ -193,7 +193,9 @@ async function handleApi(url, res, req) {
       if (p === '/api/push/rules' && m === 'GET') { const r = getRules(q.get('id')); return r ? send(res, 200, r) : send(res, 404, { error: 'unknown_device' }); }
       if (p === '/api/push/rules' && m === 'POST') { const b = await readJson(req); return send(res, 200, await addRule(b.id, b.rule || {})); }
       if (p === '/api/push/rules' && m === 'DELETE') { await deleteRule(q.get('id'), q.get('rule')); return send(res, 200, { ok: true }); }
-      if (p === '/api/push/test' && m === 'POST') { const b = await readJson(req); await sendTest(b.id); return send(res, 200, { ok: true }); }
+      if (p === '/api/push/test' && m === 'POST') { const b = await readJson(req); await (b.digest ? sendDigestNow(b.id) : sendTest(b.id)); return send(res, 200, { ok: true }); }
+      if (p === '/api/push/digest' && m === 'GET') return send(res, 200, { digest: getDigest(q.get('id')) });
+      if (p === '/api/push/digest' && m === 'POST') { const b = await readJson(req); return send(res, 200, { digest: await setDigest(b.id, b.digest) }); }
     } catch (e) { return send(res, e.code || 500, { error: e.message }); }
     return send(res, 404, { error: 'not found' });
   }

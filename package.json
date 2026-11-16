@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "NODE_USE_ENV_PROXY=1 node server/index.js",
+    "test": "node --test --experimental-test-module-mocks test/*.test.js",
     "phone": "HOST=0.0.0.0 NODE_USE_ENV_PROXY=1 node server/index.js",
     "prefetch": "node --max-old-space-size=200 scripts/prefetch-static.js"
   },

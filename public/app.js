@@ -539,7 +539,7 @@ let favs = ls.get('favStops', []);
 let favEditing = false;
 const nextTxt = new Map(); // key -> "19 3分 · 19 12分"
 const isFav = s => favs.some(f => favKey(f) === favKey(s));
-const saveFavs = () => ls.set('favStops', favs);
+const saveFavs = () => { ls.set('favStops', favs); window.syncDigestStops?.(); };
 
 function toggleFav(s) {
   if (isFav(s)) favs = favs.filter(f => favKey(f) !== favKey(s));
@@ -769,7 +769,8 @@ async function tick() {
   $('#logout').hidden = false;
   tick();
   loadStops().catch(() => {});
-  // 从通知点进来：/?stop=agency:id
+  // 从通知点进来：/?tab=favs（每日收藏摘要）或 /?stop=agency:id
+  if (new URLSearchParams(location.search).get('tab') === 'favs') { showTab('favs'); history.replaceState(history.state, '', '/'); }
   const sp = new URLSearchParams(location.search).get('stop');
   if (sp && sp.includes(':')) {
     const [ag, id] = [sp.slice(0, sp.indexOf(':')), sp.slice(sp.indexOf(':') + 1)];

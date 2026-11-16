@@ -1,5 +1,6 @@
 // 到站推送提醒（Web Push）。
-// 每台设备 = 一个推送订阅，规则挂在设备上：push:dev:<id> = { sub, rules, lang, created }；push:index = [id...]
+// 每台设备 = 一个推送订阅，规则挂在设备上：push:dev:<id> = { sub, rules, lang, created, digest? }；push:index = [id...]
+// digest = 每日收藏摘要（见 digest.js），到点推一条收藏站点的下两班。
 // 服务端每 30 秒检查一次处于时间窗内的规则；只在有规则生效时才拉实时数据。
 // 需要环境变量 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT；本地没有时自动生成并存到 data/vapid.json。
 import crypto from 'node:crypto';
@@ -7,6 +8,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import * as webpush from 'web-push';
 import { kvGet, kvSet, kvDel, kvPersistent } from './kv.js';
+import { digestDue, digestLastCall, buildDigest, cleanDigest } from './digest.js';
 
 const MAX_DEVICES = 300, MAX_RULES = 10;
 const ALLOWED_HOSTS = /(^|\.)(fcm\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com|android\.googleapis\.com)$/;
@@ -65,7 +67,7 @@ export async function subscribe(sub, lang) {
   const id = devId(sub.endpoint);
   const old = devices.get(id);
   if (!old && devices.size >= MAX_DEVICES) throw Object.assign(new Error('too_many_devices'), { code: 429 });
-  devices.set(id, { sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now() });
+  devices.set(id, { sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now(), digest: old?.digest });
   await saveDevice(id);
   if (!old) await saveIndex();
   return { id, rules: devices.get(id).rules };
@@ -79,6 +81,54 @@ export async function unsubscribe(id) {
 }
 
 export function getRules(id) { return devices.get(id)?.rules || null; }
+
+// ---------- 每日收藏摘要 ----------
+export function getDigest(id) {
+  const d = devices.get(id);
+  if (!d) throw Object.assign(new Error('unknown_device'), { code: 404 });
+  return d.digest || null;
+}
+
+export async function setDigest(id, input) {
+  const d = devices.get(id);
+  if (!d) throw Object.assign(new Error('unknown_device'), { code: 404 });
+  const dg = cleanDigest(input || {}, d.digest);
+  if (!dg) throw Object.assign(new Error('invalid_digest'), { code: 400 });
+  // 改了时间或刚打开：今天已过点就从明天开始，免得一保存就推
+  const t = torontoNow();
+  if ((input?.at || input?.enabled) && t.hm > dg.at) dg.lastDate = t.date;
+  d.digest = dg;
+  await saveDevice(id);
+  return dg;
+}
+
+async function digestPayload(dg) {
+  const arr = new Map();
+  for (const s of dg.stops.slice(0, 8)) {
+    try { arr.set(`${s.agency}:${s.id}`, await arrivalsFn(s.agency, s.id)); } catch { arr.set(`${s.agency}:${s.id}`, []); }
+  }
+  return buildDigest(dg.stops, arr, Math.floor(Date.now() / 1000), torontoNow().hm);
+}
+
+export async function sendDigestNow(id) {
+  const dg = devices.get(id)?.digest;
+  if (!dg?.stops?.length) throw Object.assign(new Error('no_favorites'), { code: 400 });
+  const m = await digestPayload(dg);
+  if (!await send(id, { title: m.title, body: m.body, tag: 'digest', url: '/?tab=favs' }, 1800)) throw Object.assign(new Error(pushState.lastError || 'send_failed'), { code: 502 });
+}
+
+async function checkDigests(t) {
+  for (const [id, d] of devices) {
+    const dg = d.digest;
+    if (!digestDue(dg, t)) continue;
+    const m = await digestPayload(dg);
+    if (m.empty && !digestLastCall(dg, t)) continue; // 刚唤醒、实时数据还没到：下一轮再试
+    if (await send(id, { title: m.title, body: m.body, tag: 'digest', url: '/?tab=favs' }, 1800)) {
+      dg.lastDate = t.date;
+      await saveDevice(id);
+    }
+  }
+}
 
 // rule: { stop:{agency,id,name}, route?:string, lead:分钟, days:[0-6], from:'HH:MM', to:'HH:MM', once:bool }
 export async function addRule(id, r) {
@@ -149,7 +199,8 @@ export async function notifyAll({ title, body, tag, key }) {
 function torontoNow() {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Toronto', hourCycle: 'h23', weekday: 'short', hour: '2-digit', minute: '2-digit' })
     .formatToParts(new Date()).map(x => [x.type, x.value]));
-  return { day: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday), hm: `${p.hour}:${p.minute}` };
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto' }).format(new Date()); // YYYY-MM-DD
+  return { day: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday), hm: `${p.hour}:${p.minute}`, date };
 }
 const inWindow = (r, t) => r.enabled && r.days.includes(t.day) && (r.from <= r.to ? t.hm >= r.from && t.hm <= r.to : t.hm >= r.from || t.hm <= r.to);
 
@@ -158,6 +209,7 @@ async function check() {
   const now = Date.now();
   for (const [k, t] of fired) if (now - t > 3 * 3600e3) fired.delete(k);
   const t = torontoNow();
+  try { await checkDigests(t); } catch (e) { pushState.lastError = `digest: ${e.message}`; }
   const active = [];
   for (const [id, d] of devices) for (const r of d.rules) if (inWindow(r, t)) active.push([id, d, r]);
   if (!active.length) return; // 没有生效的规则就不拉任何数据

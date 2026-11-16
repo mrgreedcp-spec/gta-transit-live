@@ -1,5 +1,5 @@
 // 到站推送提醒。依赖 app.js 的全局：$, esc, api, selectStop, agColor, nameOf, showTab
-const push = { id: localStorage.getItem('pushDev'), rules: [], key: null, enabled: false, reason: '' };
+const push = { id: localStorage.getItem('pushDev'), rules: [], key: null, enabled: false, reason: '', digest: null };
 const DAY_ZH = ['日', '一', '二', '三', '四', '五', '六'];
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -90,17 +90,61 @@ function ruleText(r) {
   return `${r.route ? r.route + ' 路' : '任意线路'} · 提前 ${r.lead} 分 · ${days} ${r.from}–${r.to}${r.once ? ' · 一次' : ''}${r.enabled ? '' : ' · 已完成'}`;
 }
 
+function digestHtml() {
+  const d = push.digest || { enabled: false, at: '07:30', days: [0, 1, 2, 3, 4, 5, 6] };
+  return `<div class="remind" id="dgBox"><label class="switch"><input id="dgOn" type="checkbox" ${d.enabled ? 'checked' : ''}> <b>☀️ 每天推送收藏</b></label>
+    <label>时间 <input id="dgAt" type="time" value="${esc(d.at)}">（多伦多时间），推送每个收藏站的下两班</label>
+    <div class="days">${DAY_ZH.map((x, i) => `<label class="day"><input type="checkbox" value="${i}" ${d.days.includes(i) ? 'checked' : ''}>${x}</label>`).join('')}</div>
+    <div><button class="link-btn" data-dgnow ${d.enabled ? '' : 'hidden'}>立即发一次</button> <span id="dgMsg" class="hint"></span></div></div>`;
+}
+
+const favStops = () => (typeof favs === 'undefined' ? [] : favs).map(f => ({ agency: f.agency, id: f.id, name: f.name }));
+
+async function saveDigest() {
+  const msg = $('#dgMsg');
+  const days = [...document.querySelectorAll('#dgBox .day input:checked')].map(x => +x.value);
+  const on = $('#dgOn').checked;
+  if (!days.length) { msg.textContent = '至少选一天。'; return; }
+  msg.textContent = '保存中…';
+  try {
+    const id = on ? await ensureSubscribed() : push.id;
+    if (!id) { msg.textContent = ''; return; }
+    const r = await postJson('/api/push/digest', { id, digest: { enabled: on, at: $('#dgAt').value, days, stops: favStops() } });
+    push.digest = r.digest;
+    $('[data-dgnow]').hidden = !on;
+    msg.textContent = on ? (favStops().length ? `已开启：每天 ${r.digest.at} 推送。` : '已开启。先收藏几个站点。') : '已关闭。';
+  } catch (err) { $('#dgOn').checked = !!push.digest?.enabled; msg.textContent = err.message; }
+}
+
+// 收藏增删排序后，把新列表同步到服务器（app.js 的 saveFavs 调用）。连续操作只发最后一次。
+let digestTimer = null;
+function syncDigestStops() {
+  if (!push.id || !push.digest?.enabled) return;
+  clearTimeout(digestTimer);
+  digestTimer = setTimeout(() => postJson('/api/push/digest', { id: push.id, digest: { stops: favStops() } })
+    .then(r => { push.digest = r.digest; }).catch(() => {}), 1500);
+}
+
 function renderPushBox() {
   const box = $('#pushBox');
-  if (!push.id && !push.rules.length) { box.innerHTML = ''; return; }
-  box.innerHTML = `<h3>🔔 我的到站提醒</h3><ul class="stop-list">${push.rules.map(r => `<li data-rule="${esc(r.id)}">
+  if (pushSupport() && !push.id) { box.innerHTML = ''; return; }
+  if (!push.id && !push.rules.length) { box.innerHTML = digestHtml(); return; }
+  box.innerHTML = digestHtml() + `<h3>🔔 我的到站提醒</h3><ul class="stop-list">${push.rules.map(r => `<li data-rule="${esc(r.id)}">
       <span class="tag" style="background:${agColor(r.stop.agency)}">${esc(nameOf(r.stop.agency))}</span>
       <span class="nm"><div>${esc(r.stop.name)}</div><span class="code">${esc(ruleText(r))}</span></span>
       <span class="ops"><button data-op="rdel" aria-label="删除提醒">✕</button></span></li>`).join('') || '<li class="hint">还没有提醒。在到站页点「🔔 提醒我」。</li>'}</ul>
     <button class="link-btn" data-ptest>发送测试通知</button> <span id="pTestMsg" class="hint"></span>`;
 }
 
+$('#pushBox').addEventListener('change', e => { if (e.target.closest('#dgBox')) saveDigest(); });
+
 $('#pushBox').addEventListener('click', async e => {
+  if (e.target.closest('[data-dgnow]')) {
+    $('#dgMsg').textContent = '发送中…';
+    try { await postJson('/api/push/test', { id: push.id, digest: true }); $('#dgMsg').textContent = '已发送，请看通知栏。'; }
+    catch (err) { $('#dgMsg').textContent = '发送失败：' + (err.message === 'no_favorites' ? '还没有收藏站点' : err.message); }
+    return;
+  }
   const li = e.target.closest('li[data-rule]');
   if (li && e.target.closest('[data-op="rdel"]')) {
     await fetch(`/api/push/rules?id=${encodeURIComponent(push.id)}&rule=${encodeURIComponent(li.dataset.rule)}`, { method: 'DELETE' });
@@ -123,8 +167,11 @@ $('#pushBox').addEventListener('click', async e => {
     push.key = k.publicKey; push.enabled = k.enabled; push.reason = k.reason;
     if (push.id) {
       const r = await fetch(`/api/push/rules?id=${encodeURIComponent(push.id)}`);
-      if (r.ok) push.rules = await r.json();
-      else if (r.status === 404) { push.id = null; localStorage.removeItem('pushDev'); }
+      if (r.ok) {
+        push.rules = await r.json();
+        const g = await fetch(`/api/push/digest?id=${encodeURIComponent(push.id)}`);
+        if (g.ok) push.digest = (await g.json()).digest;
+      } else if (r.status === 404) { push.id = null; localStorage.removeItem('pushDev'); }
     }
   } catch {}
   renderPushBox();
