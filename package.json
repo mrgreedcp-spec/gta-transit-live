@@ -6,7 +6,7 @@
   "scripts": {
     "start": "NODE_USE_ENV_PROXY=1 node server/index.js",
     "phone": "HOST=0.0.0.0 NODE_USE_ENV_PROXY=1 node server/index.js",
-    "prefetch": "node scripts/prefetch-static.js"
+    "prefetch": "node --max-old-space-size=200 scripts/prefetch-static.js"
   },
   "dependencies": {
     "gtfs-realtime-bindings": "^2.2.0",

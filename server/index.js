@@ -15,8 +15,8 @@ async function readJson(req, limit = 16384) {
   try { return JSON.parse(data || '{}'); } catch { throw Object.assign(new Error('bad_json'), { code: 400 }); }
 }
 import { AGENCIES, byId } from './agencies.js';
-import { getFeed, feedStatus, vehiclesOf, arrivalsAt, tripDelays, routeStyle } from './realtime.js';
-import { store, loadStatic, staticStatus, searchStops, stopsNear, stopsInBbox } from './static.js';
+import { getFeed, feedStatus, vehiclesOf, arrivalsAt, tripDelays, routeStyle, modeOf, tripUpdateOf, tripStops } from './realtime.js';
+import { store, loadStatic, staticStatus, searchStops, stopsNear, stopsInBbox, shapeOf, routeShapes } from './static.js';
 import { goKey, goGet, goStatus, goVehicles, goArrivals, goUnionDepartures, goAlerts, goFares } from './go.js';
 
 const PORT = +process.env.PORT || 8821;
@@ -106,6 +106,53 @@ async function apiArrivals(agencyId, stopId, { limit = 20, maxWaitMs = 30000 } =
   return [200, { now: t, stop, arrivals, note: '' }];
 }
 
+// 单趟车：线路走向 + 剩余站点（Livemap 式点车查看）
+// /api/trip/:agency/:tripId?veh=<车辆id>&route=<route_id 或线路号>；tripId 为 "-" 表示车辆没带 trip
+async function apiTrip(agencyId, tripIdRaw, q) {
+  const a = byId[agencyId];
+  if (!a) return [404, { error: 'unknown agency' }];
+  const st = store[a.id];
+  const t = now();
+  let tripId = tripIdRaw === '-' ? null : tripIdRaw;
+  const veh = q.get('veh') || null;
+  let routeKey = q.get('route') || null;
+  let shape = null, shapeSource = null, shapes = [], stops = [], passedCount = 0, stopsSource = 'none', note = '';
+  if (a.goApi) {
+    // GO 静态 trip_id 形如 20261127-56-56720（日期-线路-车次），实时只给车次号
+    const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto' }).format(new Date()).replaceAll('-', '');
+    if (tripId && routeKey) shape = shapeOf(st, `${ymd}-${routeKey}-${tripId}`);
+    note = 'GO 暂不提供逐站时间，只显示线路走向。';
+  } else {
+    if (tripId) shape = shapeOf(st, tripId);
+    if (a.tripUpdatesUrl) {
+      const s = await getFeed(a, 'tripUpdates', 5000);
+      const tu = tripUpdateOf(s, tripId, veh);
+      if (tu) {
+        tripId ||= tu.trip?.tripId || null;
+        routeKey ||= tu.trip?.routeId || null;
+        if (!shape && tripId) shape = shapeOf(st, tripId);
+        ({ stops, passedCount } = tripStops(tu, st, t));
+        if (stops.length) stopsSource = 'realtime'; else note = '这趟车的预测站点都已过站。';
+      } else note = s?.feed ? '这趟车暂时没有逐站预测。' : `${a.name} 实时到站暂不可用：${s?.error || '加载中'}`;
+    } else note = `${a.name} 不提供逐站预测。`;
+  }
+  if (shape) { shapes = [shape]; shapeSource = 'trip'; }
+  const trip = tripId && st ? st.trips.get(tripId) : null;
+  routeKey ||= trip?.[0] || null;
+  if (!shapes.length && routeKey) { shapes = routeShapes(st, routeKey); if (shapes.length) shapeSource = 'route'; }
+  const routeId = trip?.[0] || routeKey;
+  let r = routeId && st ? st.routes.get(routeId) : null;
+  if (!r && routeKey && st) for (const [, x] of st.routes) if (x[0] === routeKey) { r = x; break; }
+  const style = routeStyle(r, a.color);
+  let delaySec = null;
+  if (!a.goApi && a.tripUpdatesUrl) { const d = tripDelays(await getFeed(a, 'tripUpdates', 0)); delaySec = d ? (d.byTrip.get(tripId) ?? d.byVeh.get(veh) ?? null) : null; }
+  return [200, {
+    now: t, agency: a.id, tripId, routeId, routeShort: r?.[0] || routeKey || '', routeLong: r?.[1] || '',
+    routeColor: style.color, textColor: style.text, mode: a.goApi ? null : modeOf(r), headsign: trip?.[1] || '',
+    delaySec, shapes, shapeSource, stops, passedCount, stopsSource, note,
+  }];
+}
+
 // 批量到站：/api/arrivals?s=miway:0085&s=brampton:00045505&limit=2
 async function apiBatchArrivals(q) {
   const limit = Math.min(Math.max(+q.get('limit') || 2, 1), 5);
@@ -184,7 +231,9 @@ async function handleApi(url, res, req) {
     return send(res, 200, searchStops(q.get('q') || '', ids, Math.min(+q.get('limit') || 20, 50)));
   }
   if (p === '/api/arrivals') return send(res, 200, await apiBatchArrivals(q));
-  let m = p.match(/^\/api\/stops\/([^/]+)\/(.+)\/arrivals$/);
+  let m = p.match(/^\/api\/trip\/([^/]+)\/(.+)$/);
+  if (m) { const [code, body] = await apiTrip(m[1], decodeURIComponent(m[2]), q); return send(res, code, body); }
+  m = p.match(/^\/api\/stops\/([^/]+)\/(.+)\/arrivals$/);
   if (m) { const [code, body] = await apiArrivals(m[1], decodeURIComponent(m[2])); return send(res, code, body); }
 
   // GO OpenDataAPI

@@ -3,6 +3,9 @@ const REFRESH_MS = 20000;
 const DOM_LIMIT = 250;          // 视野内车辆超过这个数，改用 canvas 小圆点
 const BUS_ZOOM = 12;            // 「缩小时只显示火车」开启时，公交从这一级开始显示
 const STOP_ZOOM = 15;           // 站点图层从这一级开始显示
+const TWEEN_MS = REFRESH_MS;    // 车辆平滑移动：两次刷新之间线性补间
+const DOM_STEP_MS = 50, CV_STEP_MS = 250; // 动画步长：DOM 车标 20 帧/秒，canvas 圆点 4 帧/秒
+const MAX_TWEEN_M = 1500;       // 一次位移超过这个距离就直接跳过去（换班、数据跳变）
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -28,6 +31,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 const canvas = L.canvas({ padding: 0.3 });
 const vehLayer = L.layerGroup().addTo(map);
 const stopLayer = L.layerGroup().addTo(map);
+const tripLayer = L.layerGroup().addTo(map); // 选中车辆的线路走向和剩余站点
 map.on('moveend', () => { const c = map.getCenter(); ls.set('view', [c.lat, c.lng, map.getZoom()]); });
 
 // ---------- 状态 ----------
@@ -39,6 +43,10 @@ const hiddenRoutes = new Set(ls.get('hiddenRoutes', []));
 let busGate = ls.get('busGate', false);
 let showStops = ls.get('showStops', true);
 let selectedStop = null;
+let selected = null; // 选中的车辆 { key, v, trip, follow }
+const enabledModes = new Set(ls.get('modes', ['rail', 'metro', 'bus']));
+const modeGroup = v => v.mode === 'train' ? 'rail' : (v.mode === 'subway' || v.mode === 'tram') ? 'metro' : 'bus';
+const vkey = v => `${v.agency}:${v.id}`;
 const agColor = id => agencies.find(a => a.id === id)?.color || '#555';
 const nameOf = id => agencies.find(a => a.id === id)?.name || id;
 
@@ -53,10 +61,59 @@ const lastPos = new Map(); // key -> [lat, lon, bearing]  方向兜底
 
 function visibleVehicles() {
   const z = map.getZoom();
-  return lastVehicles.filter(v => enabled.has(v.agency)
+  return lastVehicles.filter(v => (selected && vkey(v) === selected.key) || (enabled.has(v.agency)
+    && enabledModes.has(modeGroup(v))
     && !hiddenRoutes.has(`${v.agency}:${v.routeShort}`)
-    && (!busGate || z >= BUS_ZOOM || isRail(v)));
+    && (!busGate || z >= BUS_ZOOM || isRail(v))));
 }
+
+// ---------- 平滑移动 ----------
+const motion = new Map(); // key -> { fLat, fLon, tLat, tLon, t0, dur, at }
+let activeUntil = 0, settled = true, lastDom = 0, lastCv = 0;
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+function posOf(key, v, now = performance.now()) {
+  const e = motion.get(key);
+  if (!e) return [v.lat, v.lon];
+  const k = e.dur ? Math.min(1, Math.max(0, (now - e.t0) / e.dur)) : 1;
+  return [e.fLat + (e.tLat - e.fLat) * k, e.fLon + (e.tLon - e.fLon) * k];
+}
+
+function updateMotion(vehicles) {
+  const now = performance.now();
+  const seen = new Set();
+  for (const v of vehicles) {
+    const key = vkey(v);
+    seen.add(key);
+    const e = motion.get(key);
+    if (!e) { motion.set(key, { fLat: v.lat, fLon: v.lon, tLat: v.lat, tLon: v.lon, t0: now, dur: 0, at: now }); continue; }
+    if (e.tLat === v.lat && e.tLon === v.lon) { e.at = now; continue; }
+    const [cl, co] = posOf(key, v, now);
+    const dist = Math.hypot(cl - v.lat, (co - v.lon) * Math.cos(v.lat * Math.PI / 180)) * 111000;
+    const jump = dist > MAX_TWEEN_M || now - e.at > 2 * REFRESH_MS || reducedMotion.matches;
+    motion.set(key, { fLat: jump ? v.lat : cl, fLon: jump ? v.lon : co, tLat: v.lat, tLon: v.lon, t0: now, dur: jump ? 0 : TWEEN_MS, at: now });
+    if (!jump) { activeUntil = Math.max(activeUntil, now + TWEEN_MS); settled = false; }
+  }
+  for (const k of motion.keys()) if (!seen.has(k)) motion.delete(k);
+}
+
+function animateFrame(now) {
+  requestAnimationFrame(animateFrame);
+  if (map._animatingZoom) return;
+  const live = now <= activeUntil;
+  if (!live && settled) return;
+  const domStep = !live || now - lastDom >= DOM_STEP_MS, cvStep = !live || now - lastCv >= CV_STEP_MS;
+  if (!domStep && !cvStep) return;
+  if (domStep) lastDom = now;
+  if (cvStep) lastCv = now;
+  for (const [key, rec] of markers) {
+    if (rec.kind === 'cv' ? !cvStep : !domStep) continue;
+    const e = motion.get(key);
+    if (e?.dur) rec.m.setLatLng(posOf(key, rec.v, now));
+  }
+  settled = !live;
+}
+requestAnimationFrame(animateFrame);
 
 function bearingOf(v, key) {
   if (v.bearing != null) return v.bearing;
@@ -69,15 +126,16 @@ function bearingOf(v, key) {
   return b;
 }
 
-function popupHtml(v) {
+function tripHead(v, r) {
   const age = v.ts ? Math.max(0, Math.round(serverNow - v.ts)) : null;
   const extra = [];
   if (v.occupancy != null) extra.push(`满载 ${v.occupancy}%`);
   if (v.cars) extra.push(`${v.cars} 节车厢`);
-  return `<div class="veh-pop"><span class="line" style="background:${v.routeColor};color:${v.textColor}">${esc(v.routeShort ?? '?')}</span>
-    <b> ${esc(v.headsign || '')}</b><br>${esc(nameOf(v.agency))} · 车辆 ${esc(v.label || v.id)}<br>
-    ${esc(delayText(v.delaySec))}${extra.length ? ' · ' + esc(extra.join(' · ')) : ''}<br>
-    <span class="code">${age != null ? `${age} 秒前更新` : ''}</span></div>`;
+  const head = r?.headsign || v.headsign || r?.routeLong || '';
+  return `<div class="trip-head"><span class="line" style="background:${v.routeColor};color:${v.textColor}">${esc(v.routeShort ?? '?')}</span>
+    <div class="tt"><b>${esc(head)}</b><br><span class="code">${esc(nameOf(v.agency))} · 车辆 ${esc(v.label || v.id)}</span><br>
+    ${esc(delayText(r?.stops?.[0]?.delaySec ?? v.delaySec ?? r?.delaySec ?? null))}${extra.length ? ' · ' + esc(extra.join(' · ')) : ''}
+    <span class="code">${age != null ? ` · 位置 ${age} 秒前` : ''}</span></div></div>`;
 }
 
 function renderVehicles() {
@@ -86,41 +144,44 @@ function renderVehicles() {
   const useDom = vis.length <= DOM_LIMIT;
   const seen = new Set();
   for (const v of vis) {
-    const key = `${v.agency}:${v.id}`;
+    const key = vkey(v);
     seen.add(key);
     const dc = delayClass(v.delaySec);
-    const dom = useDom || v.agency === 'go';
+    const sel = selected?.key === key;
+    const dom = useDom || v.agency === 'go' || sel;
     const b = dom ? bearingOf(v, key) : null;
-    const sig = dom ? `${v.routeShort}|${v.routeColor}|${dc}|${b == null ? '' : Math.round(b / 10)}|${v.mode}` : `${v.routeColor}|${dc}`;
+    const sig = dom ? `${v.routeShort}|${v.routeColor}|${dc}|${b == null ? '' : Math.round(b / 10)}|${v.mode}|${sel}` : `${v.routeColor}|${dc}`;
+    const pos = posOf(key, v);
     let rec = markers.get(key);
     if (rec && rec.kind !== (dom ? 'dom' : 'cv')) { vehLayer.removeLayer(rec.m); rec = null; }
     if (!rec) {
       const m = dom
-        ? L.marker([v.lat, v.lon], { icon: vehIcon(v, dc, b), keyboard: false })
-        : L.circleMarker([v.lat, v.lon], { renderer: canvas, radius: 5, weight: 2, color: delayColor[dc], fillColor: v.routeColor, fillOpacity: 1 });
+        ? L.marker(pos, { icon: vehIcon(v, dc, b, sel), keyboard: false, zIndexOffset: sel ? 1000 : 0 })
+        : L.circleMarker(pos, { renderer: canvas, radius: 5, weight: 2, color: delayColor[dc], fillColor: v.routeColor, fillOpacity: 1 });
       m.addTo(vehLayer);
-      rec = { m, kind: dom ? 'dom' : 'cv', sig };
+      rec = { m, kind: dom ? 'dom' : 'cv', sig, v };
+      m.on('click', () => selectVehicle(rec.v));
       markers.set(key, rec);
     } else {
-      rec.m.setLatLng([v.lat, v.lon]);
+      rec.v = v;
+      rec.m.setLatLng(pos); // 用当前插值位置，不把补间中的车拉到终点
       if (rec.sig !== sig) {
-        if (dom) rec.m.setIcon(vehIcon(v, dc, b)); else rec.m.setStyle({ color: delayColor[dc], fillColor: v.routeColor });
+        if (dom) { rec.m.setIcon(vehIcon(v, dc, b, sel)); rec.m.setZIndexOffset(sel ? 1000 : 0); } else rec.m.setStyle({ color: delayColor[dc], fillColor: v.routeColor });
         rec.sig = sig;
       }
     }
-    rec.m.bindPopup(popupHtml(v));
   }
   for (const [k, rec] of markers) if (!seen.has(k)) { vehLayer.removeLayer(rec.m); markers.delete(k); }
   $('#vehCount').textContent = `视野内 ${vis.length} 辆，全部 ${lastVehicles.length} 辆`;
 }
 
-function vehIcon(v, dc, b) {
+function vehIcon(v, dc, b, sel = false) {
   const label = esc(String(v.routeShort ?? '?').slice(0, 4));
   const arrow = b == null ? '' : `<i class="arrow" style="--b:${Math.round(b)}deg"></i>`;
   const sz = v.mode === 'train' ? 32 : 28;
   return L.divIcon({
     className: 'veh-wrap', iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2], popupAnchor: [0, -sz / 2],
-    html: `<div class="veh ${dc} ${v.mode === 'train' ? 'train' : ''}" style="background:${v.routeColor};color:${v.textColor}">${arrow}<span>${label}</span></div>`,
+    html: `<div class="veh ${dc} ${v.mode === 'train' ? 'train' : ''} ${sel ? 'sel' : ''}" style="background:${v.routeColor};color:${v.textColor}">${arrow}<span>${label}</span></div>`,
   });
 }
 
@@ -133,9 +194,113 @@ async function loadVehicles() {
   const r = await api(`/api/vehicles?agencies=${ids}${bbox}`);
   serverNow = r.now;
   lastVehicles = r.vehicles;
+  updateMotion(r.vehicles);
+  if (selected) { const nv = r.vehicles.find(v => vkey(v) === selected.key); if (nv) selected.v = nv; }
   renderVehicles();
   renderChips();
+  if (selected?.follow) followPan();
 }
+
+// ---------- 点车：线路走向 + 剩余站点 + 跟随 ----------
+function selectVehicle(v) {
+  const key = vkey(v);
+  showTab('veh');
+  if (selected?.key === key) return;
+  selected = { key, v, trip: null, follow: false };
+  tripLayer.clearLayers();
+  $('#tripPane').innerHTML = `${tripHead(v)}<div class="empty">行程加载中…</div>`;
+  renderVehicles();
+  setFollow(true);
+  loadTrip().catch(() => {});
+}
+
+function clearVehicle() {
+  selected = null;
+  tripLayer.clearLayers();
+  $('#tripPane').innerHTML = '<div class="hint">在地图上点一辆车，查看线路走向和剩余站点。</div>';
+  renderVehicles();
+}
+
+async function loadTrip() {
+  if (!selected) return;
+  const sel = selected, v = sel.v;
+  const r = await api(`/api/trip/${v.agency}/${encodeURIComponent(v.tripId || '-')}?veh=${encodeURIComponent(v.id)}&route=${encodeURIComponent(v.routeId || v.routeShort || '')}`);
+  if (selected !== sel) return;
+  sel.trip = r;
+  renderTrip(r);
+  drawTrip(r);
+}
+
+function renderTrip(r) {
+  const v = selected.v;
+  const rows = r.stops.map((s, i) => {
+    const min = Math.round((s.time - r.now) / 60);
+    const d = s.delaySec;
+    const dl = d == null || Math.abs(d) < 60 ? '' : d > 0 ? `<span class="late">晚 ${Math.round(d / 60)} 分</span>` : `<span class="early">早 ${Math.round(-d / 60)} 分</span>`;
+    const sch = s.sched && Math.abs(s.sched - s.time) >= 60 ? `<s>${fmtClock(s.sched)}</s>` : '';
+    return `<li class="${i === 0 ? 'first' : ''} ${s.skipped ? 'skip' : ''}" data-i="${i}"><span class="tm">${fmtClock(s.time)}${sch}</span>
+      <span>${esc(s.name || s.id || '?')} ${dl}</span><span class="mn">${s.skipped ? '跳站' : min <= 0 ? '即到' : min + ' 分'}</span></li>`;
+  }).join('');
+  $('#tripPane').innerHTML = `${tripHead(v, r)}
+    <div class="trip-ops"><button type="button" data-follow class="${selected.follow ? 'on' : ''}">${selected.follow ? '跟随中' : '跟随'}</button><button type="button" data-close>关闭</button></div>
+    ${r.passedCount ? `<div class="hint">已过 ${r.passedCount} 站，剩余 ${r.stops.length} 站</div>` : ''}
+    ${rows ? `<ul class="trip-stops" style="--line:${v.routeColor}">${rows}</ul>` : `<div class="empty">${esc(r.note || '这趟车暂时没有逐站数据。')}</div>`}`;
+}
+
+function drawTrip(r) {
+  tripLayer.clearLayers();
+  const color = selected.v.routeColor;
+  for (const s of r.shapes) {
+    const pts = decodePolyline(s, 5);
+    L.polyline(pts, { color: '#fff', weight: 9, opacity: 0.9, interactive: false }).addTo(tripLayer);
+    L.polyline(pts, { color, weight: 5, opacity: 0.95, interactive: false }).addTo(tripLayer);
+  }
+  for (const s of r.stops) {
+    if (s.lat == null) continue;
+    L.circleMarker([s.lat, s.lon], { radius: 4, weight: 2, color, fillColor: '#fff', fillOpacity: 1 })
+      .bindTooltip(`${fmtClock(s.time)} ${s.name || ''}`, { direction: 'top' }).addTo(tripLayer);
+  }
+}
+
+$('#tripPane').addEventListener('click', e => {
+  if (!selected) return;
+  if (e.target.closest('[data-follow]')) return setFollow(!selected.follow);
+  if (e.target.closest('[data-close]')) return clearVehicle();
+  const li = e.target.closest('li[data-i]');
+  const s = li && selected.trip?.stops[+li.dataset.i];
+  if (s?.id && s.lat != null) selectStop({ agency: selected.v.agency, id: s.id, code: s.code, name: s.name, lat: s.lat, lon: s.lon });
+});
+
+// 让车停在可见区域中央：手机避开底部抽屉，桌面避开左侧面板
+function followCenter(lat, lon, z) {
+  const p = map.project([lat, lon], z);
+  const r = $('#drawer').getBoundingClientRect();
+  const off = isMobile() ? L.point(0, r.height / 2) : L.point(-(r.right) / 2, 0);
+  return map.unproject(p.add(off), z);
+}
+
+function followPan() {
+  if (!selected?.follow) return;
+  const e = motion.get(selected.key);
+  const now = performance.now();
+  const [la, lo] = e ? [e.tLat, e.tLon] : [selected.v.lat, selected.v.lon];
+  const remain = e?.dur ? Math.max(0, e.t0 + e.dur - now) / 1000 : 0;
+  map.panTo(followCenter(la, lo, map.getZoom()), { animate: true, duration: Math.max(0.3, remain), easeLinearity: remain > 0.3 ? 1 : 0.25 });
+}
+
+function setFollow(on) {
+  if (!selected) return;
+  selected.follow = on;
+  const b = $('#tripPane [data-follow]');
+  if (b) { b.classList.toggle('on', on); b.textContent = on ? '跟随中' : '跟随'; }
+  if (!on) return;
+  const z = Math.max(map.getZoom(), 14);
+  const [la, lo] = posOf(selected.key, selected.v);
+  map.setView(followCenter(la, lo, z), z, { animate: false });
+  followPan();
+}
+map.on('dragstart', () => { if (selected?.follow) setFollow(false); }); // 用户拖地图就退出跟随
+map.on('zoomend', () => { if (selected?.follow) followPan(); });
 
 // ---------- 筛选面板 ----------
 $('#filterBtn').onclick = () => {
@@ -148,6 +313,10 @@ $('#busGate').checked = busGate;
 $('#showStops').checked = showStops;
 $('#busGate').onchange = e => { busGate = e.target.checked; ls.set('busGate', busGate); renderVehicles(); };
 $('#showStops').onchange = e => { showStops = e.target.checked; ls.set('showStops', showStops); loadStops(); };
+for (const [id, m] of [['modeRail', 'rail'], ['modeMetro', 'metro'], ['modeBus', 'bus']]) {
+  $('#' + id).checked = enabledModes.has(m);
+  $('#' + id).onchange = e => { e.target.checked ? enabledModes.add(m) : enabledModes.delete(m); ls.set('modes', [...enabledModes]); renderVehicles(); };
+}
 
 function renderChips() {
   if ($('#filterPanel').hidden) return;
@@ -198,7 +367,8 @@ async function loadStops() {
 }
 map.on('moveend', () => {
   clearTimeout(stopTimer);
-  stopTimer = setTimeout(() => { loadStops().catch(() => {}); renderVehicles(); if (map.getZoom() >= 12) loadVehicles().catch(() => {}); }, 300);
+  // 跟随时地图一直在平移，不额外拉车辆（每 20 秒的刷新足够）
+  stopTimer = setTimeout(() => { loadStops().catch(() => {}); renderVehicles(); if (map.getZoom() >= 12 && !selected?.follow) loadVehicles().catch(() => {}); }, 300);
 });
 map.on('zoomend', renderVehicles);
 
@@ -215,6 +385,7 @@ function showTab(name) {
   for (const s of document.querySelectorAll('#panes section')) s.classList.toggle('on', s.dataset.pane === name);
   ls.set('tab', name);
   if (isMobile() && drawerState === 'min') setDrawer('half');
+  if (name !== 'veh' && selected?.follow) setFollow(false); // 去看站点、规划路线时不抢地图
 }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) showTab(b.dataset.tab); };
 $('#handle').onclick = () => setDrawer(drawerState === 'min' ? 'half' : drawerState === 'half' ? 'full' : 'min');
@@ -483,7 +654,7 @@ let retryTimer;
 async function tick() {
   if (document.hidden) return; // 后台不轮询：省流量，也让云端能休眠
   clearTimeout(retryTimer);
-  const rs = await Promise.allSettled([loadVehicles(), loadArrivals(), loadFavArrivals(), refreshNear()]);
+  const rs = await Promise.allSettled([loadVehicles(), loadArrivals(), loadFavArrivals(), refreshNear(), loadTrip()]);
   const down = rs[0].status === 'rejected' && rs[0].reason instanceof TypeError;
   $('#banner').hidden = !down;
   if (down) { $('#banner').textContent = '服务唤醒中或网络断开，约 1 分钟内自动恢复…'; retryTimer = setTimeout(tick, 5000); return; }
@@ -493,7 +664,7 @@ async function tick() {
 
 (async () => {
   setDrawer('half');
-  showTab(ls.get('tab', favs.length ? 'favs' : 'near'));
+  showTab(ls.get('tab', favs.length ? 'favs' : 'near') === 'veh' ? (favs.length ? 'favs' : 'near') : ls.get('tab', favs.length ? 'favs' : 'near'));
   renderFavs();
   try { await loadStatus(); } catch (e) { if (e instanceof TypeError) { $('#banner').hidden = false; $('#banner').textContent = '服务唤醒中，约 1 分钟…'; } }
   renderFavs();

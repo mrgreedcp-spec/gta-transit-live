@@ -15,6 +15,9 @@ services:
         value: "24"
       - key: STATIC_MAX_AGE_DAYS
         value: "30"
+      # 限制 V8 堆，解析 TTC 线路走向时及时回收，留在 512MB 内
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=256
       - key: APP_PASSWORD
         sync: false
       - key: GO_API_KEY

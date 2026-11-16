@@ -34,6 +34,7 @@ export async function getFeed(a, kind, maxWaitMs = 4000) {
         s.error = null;
         s.stopIndex = null;
         s.delays = null;
+        s.tripIndex = null;
       } catch (e) {
         s.error = errMsg(e);
         s.errorAt = Date.now();
@@ -128,6 +129,7 @@ export function vehiclesOf(a, s, st, delays) {
       agency: a.id,
       id: v.vehicle?.id || e.id,
       label: v.vehicle?.label || null,
+      tripId,
       lat: v.position.latitude,
       lon: v.position.longitude,
       bearing: has(v.position, 'bearing') ? Math.round(v.position.bearing) : null,
@@ -161,6 +163,44 @@ function buildStopIndex(s) {
     }
   }
   return idx;
+}
+
+// 某趟车的 TripUpdate：先按 tripId 找，找不到按车辆 id 找
+export function tripUpdateOf(s, tripId, vehicleId) {
+  if (!s?.feed) return null;
+  if (!s.tripIndex) {
+    const byTrip = new Map(), byVeh = new Map();
+    for (const e of s.feed.entity) {
+      const tu = e.tripUpdate;
+      if (!tu) continue;
+      if (tu.trip?.tripId) byTrip.set(tu.trip.tripId, tu);
+      if (tu.vehicle?.id) byVeh.set(tu.vehicle.id, tu);
+    }
+    s.tripIndex = { byTrip, byVeh };
+  }
+  return (tripId && s.tripIndex.byTrip.get(tripId)) || (vehicleId && s.tripIndex.byVeh.get(vehicleId)) || null;
+}
+
+// TripUpdate → 剩余站点列表（实时时间优先，计划时间能推就推）
+export function tripStops(tu, st, nowSec) {
+  const out = [];
+  let passed = 0;
+  (tu?.stopTimeUpdate || []).forEach((u, i) => {
+    const time = num(u.arrival?.time) || num(u.departure?.time);
+    if (!time) return;
+    if (time < nowSec - 30) { passed++; return; }
+    const delaySec = eventDelay(u.arrival) ?? eventDelay(u.departure);
+    const sch = num(u.arrival?.scheduledTime) || num(u.departure?.scheduledTime) || null;
+    const stop = u.stopId && st ? st.stopById.get(u.stopId) : null;
+    out.push({
+      seq: has(u, 'stopSequence') ? u.stopSequence : i,
+      id: u.stopId || null, code: stop?.code || null, name: stop?.name || null, lat: stop?.lat ?? null, lon: stop?.lon ?? null,
+      time, sched: sch ?? (delaySec != null ? time - delaySec : null), delaySec,
+      skipped: u.scheduleRelationship === 1 || u.scheduleRelationship === 'SKIPPED',
+    });
+  });
+  out.sort((a, b) => a.time - b.time);
+  return { stops: out, passedCount: passed };
 }
 
 export function arrivalsAt(s, stopId) {

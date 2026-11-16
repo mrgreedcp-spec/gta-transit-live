@@ -158,3 +158,24 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
 .remind select, .remind input[type=time] { padding: 5px 6px; border: 1px solid #d0d5da; border-radius: 6px; font: inherit; }
 .days { display: flex; gap: 4px; flex-wrap: wrap; }
 .day { display: flex; align-items: center; gap: 2px; border: 1px solid #d0d5da; border-radius: 6px; padding: 3px 6px; cursor: pointer; }
+
+/* Livemap：选中车辆、行程面板 */
+.veh.sel { box-shadow: 0 0 0 3px #fff, 0 0 0 6px #0a66c2; z-index: 2; }
+.leaflet-marker-icon.veh-wrap.sel-wrap { z-index: 10000 !important; }
+.fp-row.modes { display: flex; gap: 12px; flex-wrap: wrap; }
+.trip-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.trip-head .line { flex: none; }
+.trip-head .tt { flex: 1; min-width: 0; }
+.trip-head .tt b { font-size: 15px; }
+.trip-ops { display: flex; gap: 8px; margin: 6px 0; }
+.trip-ops button { border: 1px solid #ccc; background: #fff; border-radius: 14px; padding: 4px 12px; cursor: pointer; }
+.trip-ops button.on { background: #0a66c2; border-color: #0a66c2; color: #fff; }
+.trip-stops { list-style: none; margin: 0; padding: 0 0 0 10px; border-left: 4px solid var(--line, #888); }
+.trip-stops li { position: relative; display: grid; grid-template-columns: 52px 1fr auto; gap: 6px; padding: 6px 0 6px 8px; border-bottom: 1px solid #f2f2f2; align-items: baseline; cursor: pointer; }
+.trip-stops li::before { content: ''; position: absolute; left: -17px; top: 11px; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2px solid var(--line, #888); }
+.trip-stops li.first::before { background: var(--line, #888); }
+.trip-stops .tm { font-weight: 700; font-variant-numeric: tabular-nums; }
+.trip-stops .tm s { display: block; font-weight: 400; color: #999; font-size: 11px; }
+.trip-stops .mn { color: #666; font-size: 12px; white-space: nowrap; }
+.trip-stops .late { color: #d6302a; font-size: 11px; } .trip-stops .early { color: #2e9e44; font-size: 11px; }
+.trip-stops li.skip { color: #aaa; text-decoration: line-through; }

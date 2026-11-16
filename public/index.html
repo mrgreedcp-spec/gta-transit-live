@@ -31,6 +31,11 @@
     <label class="switch"><input type="checkbox" id="busGate"> 缩小时只显示火车（放大到 12 级显示公交）</label>
     <label class="switch"><input type="checkbox" id="showStops"> 放大后显示站点</label>
   </div>
+  <div class="fp-row modes">
+    <label class="switch"><input type="checkbox" id="modeRail"> 🚆 铁路</label>
+    <label class="switch"><input type="checkbox" id="modeMetro"> 🚋 地铁·电车</label>
+    <label class="switch"><input type="checkbox" id="modeBus"> 🚌 公交</label>
+  </div>
   <div id="routeChips"></div>
 </div>
 
@@ -56,6 +61,7 @@
     <button type="button" data-tab="near">附近</button>
     <button type="button" data-tab="favs">收藏</button>
     <button type="button" data-tab="stop">到站</button>
+    <button type="button" data-tab="veh">车辆</button>
     <button type="button" data-tab="status">状态</button>
   </nav>
   <div id="panes">
@@ -87,6 +93,9 @@
     <section data-pane="stop">
       <div id="remindForm"></div>
       <div id="arrivals"><div class="hint">在地图上点站点，或搜索站点。</div></div>
+    </section>
+    <section data-pane="veh">
+      <div id="tripPane"><div class="hint">在地图上点一辆车，查看线路走向和剩余站点。</div></div>
     </section>
     <section data-pane="status">
       <div id="agencies"></div>

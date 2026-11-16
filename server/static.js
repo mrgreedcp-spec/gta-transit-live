@@ -7,7 +7,7 @@ import { downloadTo, errMsg } from './fetch.js';
 
 const DATA = path.resolve(import.meta.dirname, '..', 'data');
 const MAX_AGE_MS = (+process.env.STATIC_MAX_AGE_DAYS || 7) * 24 * 3600 * 1000;
-const CACHE_V = 2; // 解析格式版本，变了就重下
+const CACHE_V = 3; // 解析格式版本，变了就重下（3：加线路走向 shapes）
 const RETRY_MS = 10 * 60 * 1000;
 
 // store[id] = { state, routes: Map, stops: [], stopById: Map, trips: Map, downloadedAt, error }
@@ -49,13 +49,13 @@ async function readTables(file, wanted) {
         if (err) return reject(err);
         try {
           const rl = createInterface({ input: stream, crlfDelay: Infinity });
-          let cols = null;
+          let idx = null; // 列下标只在表头算一次（shapes.txt 近百万行）
           for await (let line of rl) {
-            if (!cols) { cols = parseCsvLine(line.replace(/^﻿/, '')).map(s => s.trim()); continue; }
+            if (!idx) { const cols = parseCsvLine(line.replace(/^﻿/, '')).map(s => s.trim()); idx = spec.cols.map(k => cols.indexOf(k)); continue; }
             if (!line) continue;
             const v = parseCsvLine(line);
             const o = {};
-            for (const k of spec.cols) { const i = cols.indexOf(k); o[k] = i >= 0 ? (v[i] ?? '').trim() : ''; }
+            for (let j = 0; j < idx.length; j++) { const i = idx[j]; o[spec.cols[j]] = i >= 0 ? (v[i] ?? '').trim() : ''; }
             spec.onRow(o);
           }
           zip.readEntry();
@@ -65,11 +65,11 @@ async function readTables(file, wanted) {
     zip.readEntry();
   });
   zip.close();
-  for (const k of Object.keys(wanted)) if (!found.has(k)) throw new Error(`zip 缺少 ${k}`);
+  for (const k of Object.keys(wanted)) if (!found.has(k) && !wanted[k].optional) throw new Error(`zip 缺少 ${k}`);
 }
 
 async function parseZip(file) {
-  const routes = {}, stops = [], trips = {};
+  const routes = {}, stops = [], trips = {}, rawShapes = new Map();
   const hs = new Map(); const headsigns = [];
   const hsIdx = s => { let i = hs.get(s); if (i === undefined) { i = headsigns.length; headsigns.push(s); hs.set(s, i); } return i; };
   await readTables(file, {
@@ -77,20 +77,105 @@ async function parseZip(file) {
       onRow: r => { routes[r.route_id] = [r.route_short_name, r.route_long_name, r.route_color, r.route_type === '' ? null : +r.route_type, r.route_text_color]; } },
     'stops.txt': { cols: ['stop_id', 'stop_code', 'stop_name', 'stop_lat', 'stop_lon'],
       onRow: r => { if (r.stop_lat) stops.push([r.stop_id, r.stop_code, r.stop_name, +r.stop_lat, +r.stop_lon]); } },
-    'trips.txt': { cols: ['trip_id', 'route_id', 'trip_headsign', 'direction_id'],
-      onRow: r => { trips[r.trip_id] = [r.route_id, hsIdx(r.trip_headsign), r.direction_id === '' ? null : +r.direction_id]; } },
+    'trips.txt': { cols: ['trip_id', 'route_id', 'trip_headsign', 'direction_id', 'shape_id'],
+      onRow: r => { trips[r.trip_id] = [r.route_id, hsIdx(r.trip_headsign), r.direction_id === '' ? null : +r.direction_id, r.shape_id]; } },
+    'shapes.txt': { optional: true, cols: ['shape_id', 'shape_pt_lat', 'shape_pt_lon', 'shape_pt_sequence'],
+      onRow: r => { let a = rawShapes.get(r.shape_id); if (!a) rawShapes.set(r.shape_id, (a = [])); a.push(+r.shape_pt_sequence, +r.shape_pt_lat, +r.shape_pt_lon); } },
   });
-  return { routes, stops, trips, headsigns };
+  // 只处理被 trip 用到的 shape：排序 → 5 米 Douglas-Peucker 简化 → polyline（精度 5）
+  const shapes = [], shapeIdx = new Map();
+  for (const t of Object.values(trips)) {
+    const sid = t[3];
+    let i = -1;
+    if (sid && shapeIdx.has(sid)) i = shapeIdx.get(sid);
+    else if (sid && rawShapes.has(sid)) {
+      const a = rawShapes.get(sid), pts = [];
+      for (let k = 0; k < a.length; k += 3) pts.push([a[k], a[k + 1], a[k + 2]]);
+      pts.sort((x, y) => x[0] - y[0]);
+      i = shapes.length;
+      shapes.push(encodePolyline(simplifyDP(pts.map(p => [p[1], p[2]]), 5)));
+      shapeIdx.set(sid, i);
+      rawShapes.delete(sid);
+    } else if (sid) shapeIdx.set(sid, -1);
+    t[3] = i;
+  }
+  rawShapes.clear();
+  return { routes, stops, trips, headsigns, shapes };
+}
+
+// 迭代版 Douglas-Peucker。pts = [[lat, lon], ...]，tolM 为米
+function simplifyDP(pts, tolM) {
+  if (pts.length < 3) return pts;
+  const kx = 111320 * Math.cos(43.7 * Math.PI / 180), ky = 110540;
+  const xy = pts.map(([la, lo]) => [lo * kx, la * ky]);
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  const tol2 = tolM * tolM;
+  while (stack.length) {
+    const [s, e] = stack.pop();
+    const [ax, ay] = xy[s], [bx, by] = xy[e];
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    let best = -1, bestD = tol2;
+    for (let i = s + 1; i < e; i++) {
+      const [px, py] = xy[i];
+      let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const qx = ax + t * dx - px, qy = ay + t * dy - py, d = qx * qx + qy * qy;
+      if (d > bestD) { bestD = d; best = i; }
+    }
+    if (best > 0) { keep[best] = 1; stack.push([s, best], [best, e]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+function encodePolyline(pts, precision = 5) {
+  const f = 10 ** precision;
+  let out = '', pLat = 0, pLon = 0;
+  const enc = v => { v = v < 0 ? ~(v << 1) : v << 1; let s = ''; while (v >= 0x20) { s += String.fromCharCode((0x20 | (v & 0x1f)) + 63); v >>= 5; } return s + String.fromCharCode(v + 63); };
+  for (const [la, lo] of pts) {
+    const a = Math.round(la * f), b = Math.round(lo * f);
+    out += enc(a - pLat) + enc(b - pLon);
+    pLat = a; pLon = b;
+  }
+  return out;
 }
 
 function hydrate(id, j, downloadedAt) {
   const trips = new Map();
-  for (const [k, [rid, h, d]] of Object.entries(j.trips)) trips.set(k, [rid, j.headsigns[h], d]);
+  for (const [k, [rid, h, d, sh]] of Object.entries(j.trips)) trips.set(k, [rid, j.headsigns[h], d, sh ?? -1]);
   const stops = j.stops.map(([sid, code, name, lat, lon]) => ({ id: sid, code, name, lat, lon, lname: name.toLowerCase() }));
   store[id] = {
     state: 'ready', routes: new Map(Object.entries(j.routes)), stops,
-    stopById: new Map(stops.map(s => [s.id, s])), trips, downloadedAt, error: null,
+    stopById: new Map(stops.map(s => [s.id, s])), trips, shapes: j.shapes || [], routeShapeCache: new Map(), downloadedAt, error: null,
   };
+}
+
+// 某趟车的走向（polyline 精度 5），没有返回 null
+export function shapeOf(st, tripId) {
+  const i = st?.trips.get(tripId)?.[3];
+  return i != null && i >= 0 ? st.shapes[i] || null : null;
+}
+
+// 某条线路每个方向最常用的走向（最多 2 条）。routeKey 可以是 route_id 或线路号（GO 实时只给线路号）
+export function routeShapes(st, routeKey) {
+  if (!st || !routeKey || !st.shapes?.length) return [];
+  const key = String(routeKey);
+  if (st.routeShapeCache.has(key)) return st.routeShapeCache.get(key);
+  const ids = new Set();
+  for (const [rid, r] of st.routes) if (rid === key || r[0] === key) ids.add(rid);
+  const count = new Map(); // dir -> Map(shapeIdx -> n)
+  for (const [, t] of st.trips) {
+    if (!ids.has(t[0]) || t[3] < 0) continue;
+    const d = t[2] ?? 0;
+    let m = count.get(d); if (!m) count.set(d, (m = new Map()));
+    m.set(t[3], (m.get(t[3]) || 0) + 1);
+  }
+  const out = [];
+  for (const m of count.values()) { const best = [...m].sort((a, b) => b[1] - a[1])[0]; if (best && !out.includes(st.shapes[best[0]])) out.push(st.shapes[best[0]]); }
+  const res = out.slice(0, 2);
+  st.routeShapeCache.set(key, res);
+  return res;
 }
 
 async function refresh(a) {
@@ -105,13 +190,13 @@ async function refresh(a) {
   await writeFile(path.join(dir, 'meta.json'), JSON.stringify({ v: CACHE_V, downloadedAt, url: a.staticUrl }));
   await rm(zip, { force: true }); // 解析完不再需要，避免占空间
   hydrate(a.id, j, downloadedAt);
-  console.log(`[static] ${a.id} 下载+解析完成 ${((Date.now() - t0) / 1000).toFixed(1)}s，routes=${Object.keys(j.routes).length} stops=${j.stops.length} trips=${Object.keys(j.trips).length}`);
+  console.log(`[static] ${a.id} 下载+解析完成 ${((Date.now() - t0) / 1000).toFixed(1)}s，routes=${Object.keys(j.routes).length} stops=${j.stops.length} trips=${Object.keys(j.trips).length} shapes=${j.shapes.length}`);
 }
 
 const attempts = {};
 export async function loadStatic(a) {
   const dir = path.join(DATA, a.id);
-  store[a.id] ??= { state: 'loading', routes: new Map(), stops: [], stopById: new Map(), trips: new Map() };
+  store[a.id] ??= { state: 'loading', routes: new Map(), stops: [], stopById: new Map(), trips: new Map(), shapes: [], routeShapeCache: new Map() };
   let needDownload = true;
   try {
     const meta = JSON.parse(await readFile(path.join(dir, 'meta.json'), 'utf8'));
