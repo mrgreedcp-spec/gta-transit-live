@@ -7,7 +7,7 @@ import zlib from 'node:zlib';
 import { handleAuth, authEnabled } from './auth.js';
 import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
-import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow } from './push.js';
+import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule } from './push.js';
 import { kvStatus } from './kv.js';
 
 async function readJson(req, limit = 16384) {
@@ -255,15 +255,27 @@ async function handleApi(url, res, req) {
 }
 
 // 外部提醒：本机脚本带 x-notify-key（= 环境变量 NOTIFY_SECRET）调用，推给全部设备。未设 NOTIFY_SECRET 时接口不存在。
-async function handleNotify(req, res) {
+// 外部调用（Mac 端提醒器）的密钥校验；通过返回 true，否则已写好错误响应
+function notifyAuth(req, res, method) {
   const secret = process.env.NOTIFY_SECRET;
-  if (!secret) return send(res, 404, { error: 'not found' });
-  if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
+  if (!secret) { send(res, 404, { error: 'not found' }); return false; }
+  if (req.method !== method) { send(res, 405, { error: 'method_not_allowed' }); return false; }
   const wait = take('write', clientKey(req));
-  if (wait) { res.setHeader('retry-after', String(wait)); return send(res, 429, { error: 'rate_limited', retryAfter: wait }); }
+  if (wait) { res.setHeader('retry-after', String(wait)); send(res, 429, { error: 'rate_limited', retryAfter: wait }); return false; }
   const got = Buffer.from(String(req.headers['x-notify-key'] || '')), want = Buffer.from(secret);
-  if (!got.length) return send(res, 401, { error: 'unauthorized' });
-  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return send(res, 403, { error: 'forbidden' });
+  if (!got.length) { send(res, 401, { error: 'unauthorized' }); return false; }
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) { send(res, 403, { error: 'forbidden' }); return false; }
+  return true;
+}
+
+// GET /api/notify/schedule：每日收藏摘要的时间表，Mac 据此在到点前 5 分钟叫醒服务器
+async function handleNotifySchedule(req, res) {
+  if (!notifyAuth(req, res, 'GET')) return;
+  try { return send(res, 200, { schedule: digestSchedule() }); } catch (e) { return send(res, e.code || 500, { error: e.message }); }
+}
+
+async function handleNotify(req, res) {
+  if (!notifyAuth(req, res, 'POST')) return;
   try {
     const b = await readJson(req, 2048);
     const body = String(b.body || '').trim().slice(0, 300);
@@ -295,6 +307,7 @@ http.createServer(async (req, res) => {
   try {
     if (url.pathname === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('ok'); }
     if (url.pathname === '/api/notify') return await handleNotify(req, res);
+    if (url.pathname === '/api/notify/schedule') return await handleNotifySchedule(req, res);
     if (await handleAuth(req, res, url)) return;
     if (url.pathname.startsWith('/api/')) await handleApi(url, res, req);
     else await serveFile(url, res);

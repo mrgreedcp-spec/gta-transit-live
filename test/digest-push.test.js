@@ -67,3 +67,16 @@ test('立即发一次不改 lastDate', async () => {
   assert.equal(sent.length, n + 1);
   assert.equal(P.getDigest(id).lastDate, before);
 });
+
+test('给 Mac 的时间表：只含启用且有站点的，去重，只有 at 和 days', async () => {
+  await P.setDigest(id, { enabled: true, at: '07:30', days: [1, 2], stops: [{ agency: 'miway', id: '1762', name: 'A' }] });
+  const sub2 = { endpoint: 'https://fcm.googleapis.com/fcm/send/y', keys: { p256dh: 'a', auth: 'b' } };
+  const id2 = (await P.subscribe(sub2, 'zh')).id;
+  await P.setDigest(id2, { enabled: true, at: '07:30', days: [2, 1], stops: [{ agency: 'miway', id: '9', name: 'B' }] });
+  assert.deepEqual(P.digestSchedule(), [{ at: '07:30', days: [1, 2] }]);
+  await P.setDigest(id2, { at: '06:00', days: [0] });
+  assert.deepEqual(P.digestSchedule(), [{ at: '06:00', days: [0] }, { at: '07:30', days: [1, 2] }]);
+  await P.setDigest(id2, { enabled: false });
+  await P.setDigest(id, { stops: [] });
+  assert.deepEqual(P.digestSchedule(), []);
+});

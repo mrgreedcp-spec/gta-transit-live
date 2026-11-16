@@ -102,6 +102,17 @@ export async function setDigest(id, input) {
   return dg;
 }
 
+// 给 Mac 端提醒器（POST/GET /api/notify* 密钥鉴权）：所有启用摘要的时间，用来到点前叫醒本服务。不含站点和设备。
+export function digestSchedule() {
+  if (!ready) throw Object.assign(new Error(pushState.reason || 'push_disabled'), { code: 503 });
+  const seen = new Map();
+  for (const d of devices.values()) {
+    const g = d.digest;
+    if (g?.enabled && g.stops?.length) seen.set(`${g.at}|${g.days.join(',')}`, { at: g.at, days: [...g.days] });
+  }
+  return [...seen.values()].sort((x, y) => (x.at + x.days).localeCompare(y.at + y.days));
+}
+
 async function digestPayload(dg) {
   const arr = new Map();
   for (const s of dg.stops.slice(0, 8)) {
