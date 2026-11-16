@@ -444,20 +444,35 @@ $('#drawer').addEventListener('focusin', e => {
   if (kbPrev == null) kbPrev = drawerState;
   if (drawerState !== 'full') setDrawer('full');
   $('#panes').scrollTop = 0;
-  setTimeout(() => scrollTo(0, 0), 350); // iOS 可能已把页面上推
+  setTimeout(() => { scrollTo(0, 0); syncKb(); fitPlanTo(); }, 350); // iOS 可能已把页面上推
 });
+// 小屏：终点框下面放不下候选列表时，把终点这一行滚到面板顶部（不用 scrollIntoView，它会带动整页）
+function fitPlanTo() {
+  const panes = $('#panes'), row = document.activeElement?.id === 'planTo' && $('#planTo').closest('.pf-row');
+  if (!row || !isMobile() || panes.clientHeight >= 300) return;
+  panes.scrollTop += row.getBoundingClientRect().top - panes.getBoundingClientRect().top - 4;
+}
+$('#drawer').addEventListener('transitionend', e => { if (e.target === e.currentTarget && e.propertyName === 'height') fitPlanTo(); }); // 键盘弹出后抽屉变矮，过渡结束再对齐
 $('#drawer').addEventListener('focusout', () => {
   if (kbPrev == null) return;
   kbTimer = setTimeout(() => {
+    syncKb();
     if (document.activeElement?.matches?.(TEXT_IN)) return;
     if (drawerState === 'full' && kbPrev !== 'full') setDrawer(kbPrev);
     kbPrev = null;
   }, 300);
 });
-if (window.visualViewport) visualViewport.addEventListener('resize', () => {
-  const kb = visualViewport.scale > 1.01 ? 0 : innerHeight - visualViewport.height;
-  document.documentElement.style.setProperty('--kb', (kb > 120 ? Math.round(kb) : 0) + 'px');
-});
+// 软键盘：iOS Safari 和新版 Android Chrome 弹键盘只缩 visualViewport，fixed 抽屉的下半截会被键盘盖住。
+// 算出被挡的底部高度写进 --kb，CSS 用它把抽屉抬到键盘上方；--vvh 限制抽屉和候选列表的高度。
+function syncKb() {
+  const vv = window.visualViewport, st = document.documentElement.style;
+  const occ = !vv || vv.scale > 1.01 ? 0 : innerHeight - (vv.offsetTop + vv.height);
+  if (occ > 120) {
+    st.setProperty('--kb', Math.round(occ) + 'px'); st.setProperty('--vvh', Math.round(vv.height) + 'px');
+  }
+  else { st.removeProperty('--kb'); st.removeProperty('--vvh'); }
+}
+if (window.visualViewport) { visualViewport.addEventListener('resize', syncKb); visualViewport.addEventListener('scroll', syncKb); }
 $('#legendToggle').onclick = () => $('#legend').classList.toggle('open');
 
 // ---------- 搜索 ----------

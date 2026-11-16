@@ -65,19 +65,22 @@ function bindPlaceInput(which) {
       render();
     }, 350);
   });
+  // 按下候选项时不让输入框失焦：否则手机键盘先收起、抽屉跟着下移，手指会点空
+  ul.addEventListener('mousedown', e => e.preventDefault());
   ul.addEventListener('click', async e => {
     const li = e.target.closest('li[data-i]');
     if (!li) return;
     const x = items[+li.dataset.i];
     if (x.special === 'none') return;
-    if (x.special === 'center') { const c = map.getCenter(); return setPlace(which, { label: '地图中心', lat: c.lat, lon: c.lng }); }
+    if (x.special === 'center') { const c = map.getCenter(); setPlace(which, { label: '地图中心', lat: c.lat, lon: c.lng }); return input.blur(); }
     if (x.special === 'me') {
       input.value = '定位中…';
-      try { const [lat, lon] = await myPosition(); setPlace(which, { label: '我的位置', lat, lon }); }
+      try { const [lat, lon] = await myPosition(); setPlace(which, { label: '我的位置', lat, lon }); input.blur(); }
       catch (err) { input.value = ''; ul.innerHTML = `<li>${esc(err.message || '拿不到位置，可以用地图中心')}</li>`; }
       return;
     }
     setPlace(which, { label: x.label, lat: x.lat, lon: x.lon });
+    input.blur();
   });
   input.addEventListener('blur', () => setTimeout(() => { ul.innerHTML = ''; }, 200));
 }

@@ -143,8 +143,11 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
   .leaflet-control-zoom { display: none; }
   .leaflet-bottom { bottom: var(--drawer-h, 45dvh); transition: bottom .2s; }
 
-  #drawer { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: none; border-radius: 16px 16px 0 0;
-    height: var(--drawer-h, 45dvh); transition: height .2s; padding-bottom: env(safe-area-inset-bottom); }
+  /* --kb：软键盘（含键盘上方工具条）挡住的底部高度；--vvh：键盘打开时的可视高度。都由 app.js 的 syncKb() 写入。
+     键盘打开时抽屉整体抬到键盘上方，高度不超过可视区，候选列表不再落到键盘后面 */
+  #drawer { left: 0; right: 0; top: auto; bottom: var(--kb, 0px); width: auto; max-height: none; border-radius: 16px 16px 0 0;
+    height: min(var(--drawer-h, 45dvh), calc(var(--vvh, 100dvh) - 8px)); transition: height .2s;
+    padding-bottom: max(0px, calc(env(safe-area-inset-bottom) - var(--kb, 0px))); }
   #drawer.dragging { transition: none; }
   #panes { flex: 1; }
   #handle { display: flex; justify-content: center; padding: 8px 0 4px; cursor: grab; flex: none; touch-action: none; }
@@ -193,9 +196,8 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
   .chip { min-width: 44px; height: 36px; font-size: 13px; }
   .chips { gap: 6px; }
   .switch { padding: 9px 0; }
-  /* 键盘弹出时，抽屉内容可以滚到键盘上方 */
-  #panes { padding-bottom: calc(12px + var(--kb, 0px)); }
-  .pf-sug { max-height: 200px; }
+  /* 候选列表高度跟着可视区缩：190px ≈ 把手 + 标签栏 + 两行输入框 + 间距 */
+  .pf-sug { max-height: clamp(96px, calc(var(--vvh, 100dvh) - 190px), 200px); }
   .pf-opts { flex-wrap: wrap; }
   .pf-opts .primary { margin-left: auto; }
   #planTime { order: 1; flex: 1 1 100%; }
