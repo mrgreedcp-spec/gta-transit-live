@@ -1,5 +1,5 @@
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; overflow: hidden; font: 14px/1.4 -apple-system, "PingFang SC", system-ui, sans-serif; color: #1d1d1f; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; font: 14px/1.4 -apple-system, "PingFang SC", system-ui, sans-serif; color: #1d1d1f; }
 #map { position: fixed; inset: 0; background: #e8ecef; }
 .base-tiles { filter: grayscale(.85) brightness(1.06) contrast(.88); }
 button { font: inherit; }
@@ -149,7 +149,8 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
   #panes { flex: 1; }
   #handle { display: flex; justify-content: center; padding: 8px 0 4px; cursor: grab; flex: none; touch-action: none; }
   #handle span { width: 40px; height: 5px; border-radius: 3px; background: #ccc; }
-  #stopSearch, input { font-size: 16px; } /* 防止 iOS 聚焦放大 */
+  /* 输入控件 ≥16px，防止 iOS 聚焦时自动放大；用 ID 压过 .pf-row / .remind 的 font: inherit */
+  #stopSearch, #drawer input, #drawer select, #drawer textarea { font-size: 16px; }
 }
 
 /* ---------- 到站提醒 ---------- */
@@ -179,3 +180,43 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
 .trip-stops .mn { color: #666; font-size: 12px; white-space: nowrap; }
 .trip-stops .late { color: #d6302a; font-size: 11px; } .trip-stops .early { color: #2e9e44; font-size: 11px; }
 .trip-stops li.skip { color: #aaa; text-decoration: line-through; }
+
+/* ---------- 手机体验优化 ---------- */
+@media (max-width: 760px) {
+  #panes, #filterPanel, #stopResults, .pf-sug { overscroll-behavior: contain; }
+  #handle { padding: 12px 0 11px; }            /* 把手 17px → 28px，好抓 */
+  #handle span { width: 44px; }
+  .leaflet-bar.leaflet-control-locate a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
+  /* 筛选面板不压到抽屉；打开时隐藏图例 */
+  #filterPanel { max-height: calc(100dvh - 68px - env(safe-area-inset-top) - var(--drawer-h, 45dvh)); }
+  body.filter-open #legend { display: none; }
+  .chip { min-width: 44px; height: 36px; font-size: 13px; }
+  .chips { gap: 6px; }
+  .switch { padding: 9px 0; }
+  /* 键盘弹出时，抽屉内容可以滚到键盘上方 */
+  #panes { padding-bottom: calc(12px + var(--kb, 0px)); }
+  .pf-sug { max-height: 200px; }
+  .pf-opts { flex-wrap: wrap; }
+  .pf-opts .primary { margin-left: auto; }
+  #planTime { order: 1; flex: 1 1 100%; }
+  .hint, .code, .empty { font-size: 13px; }
+  #tabs button { padding: 12px 0; }
+  /* 其他偏小的触控目标 */
+  .link-btn { padding: 10px 4px; }
+  .trip-ops button { padding: 8px 16px; }
+  .day { padding: 6px 9px; }
+  #legendToggle { padding: 8px 12px; }
+}
+
+/* ---------- iOS ---------- */
+/* 按钮、链接、抽屉禁用双击放大，点击无 300ms 延迟 */
+button, a, input, select, label, #drawer, #tabs, .chip { touch-action: manipulation; }
+/* 长按地图、把手、标签不弹出选择/放大镜 */
+#map, #handle, #tabs, .veh-wrap, .chip, #filterBtn, #legendToggle { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* 防止横屏时 iOS 自动放大字号 */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* 横屏刘海：左右避让 */
+@media (max-width: 760px) {
+  #searchBox { left: calc(10px + env(safe-area-inset-left)); }
+  #filterBtn { right: calc(10px + env(safe-area-inset-right)); }
+}

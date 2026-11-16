@@ -21,14 +21,16 @@ async function api(url) {
 }
 
 // ---------- 地图 ----------
-const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView(ls.get('view', [43.68, -79.52, 10]).slice(0, 2), ls.get('view', [0, 0, 10])[2]);
+// 所有矢量图层共用一个 canvas：两个 canvas 叠放时只有上层能收到点击，会导致车辆圆点、站点点不中
+// 触屏上放大命中范围：小圆点半径 5，加 12px 容差后手指更容易点中
+const canvas = L.canvas({ padding: 0.3, tolerance: (isMobile() || matchMedia('(pointer: coarse)').matches) ? 12 : 0 });
+const map = L.map('map', { zoomControl: false, preferCanvas: true, renderer: canvas }).setView(ls.get('view', [43.68, -79.52, 10]).slice(0, 2), ls.get('view', [0, 0, 10])[2]);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
 // 淡色底图：OSM 瓦片 + CSS 灰度（见 style.css .base-tiles）
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19, className: 'base-tiles', attribution: '&copy; OpenStreetMap contributors',
 }).addTo(map);
-const canvas = L.canvas({ padding: 0.3 });
 const vehLayer = L.layerGroup().addTo(map);
 const stopLayer = L.layerGroup().addTo(map);
 const tripLayer = L.layerGroup().addTo(map); // 选中车辆的线路走向和剩余站点
@@ -212,6 +214,7 @@ function selectVehicle(v) {
   renderVehicles();
   setFollow(true);
   loadTrip().catch(() => {});
+  syncBack();
 }
 
 function clearVehicle() {
@@ -219,6 +222,7 @@ function clearVehicle() {
   tripLayer.clearLayers();
   $('#tripPane').innerHTML = '<div class="hint">在地图上点一辆车，查看线路走向和剩余站点。</div>';
   renderVehicles();
+  syncBack();
 }
 
 async function loadTrip() {
@@ -252,8 +256,9 @@ function drawTrip(r) {
   const color = selected.v.routeColor;
   for (const s of r.shapes) {
     const pts = decodePolyline(s, 5);
-    L.polyline(pts, { color: '#fff', weight: 9, opacity: 0.9, interactive: false }).addTo(tripLayer);
-    L.polyline(pts, { color, weight: 5, opacity: 0.95, interactive: false }).addTo(tripLayer);
+    // 线画在车辆圆点下面
+    L.polyline(pts, { color, weight: 5, opacity: 0.95, interactive: false }).addTo(tripLayer).bringToBack();
+    L.polyline(pts, { color: '#fff', weight: 9, opacity: 0.9, interactive: false }).addTo(tripLayer).bringToBack();
   }
   for (const s of r.stops) {
     if (s.lat == null) continue;
@@ -275,7 +280,7 @@ $('#tripPane').addEventListener('click', e => {
 function followCenter(lat, lon, z) {
   const p = map.project([lat, lon], z);
   const r = $('#drawer').getBoundingClientRect();
-  const off = isMobile() ? L.point(0, r.height / 2) : L.point(-(r.right) / 2, 0);
+  const off = isMobile() ? L.point(0, drawerPx / 2) : L.point(-(r.right) / 2, 0); // 手机用目标高度，抽屉过渡中也算得对
   return map.unproject(p.add(off), z);
 }
 
@@ -302,12 +307,25 @@ function setFollow(on) {
 map.on('dragstart', () => { if (selected?.follow) setFollow(false); }); // 用户拖地图就退出跟随
 map.on('zoomend', () => { if (selected?.follow) followPan(); });
 
+// 手机：用户手指拖地图超过 24px 就把抽屉收到最低（程序平移、缩放不触发 dragstart，不受影响）
+const TEXT_IN = '#drawer input:not([type]), #drawer input[type=text], #drawer input[type=search]';
+let dragC0 = null;
+map.on('dragstart', () => { dragC0 = isMobile() && drawerState !== 'min' ? map.getCenter() : null; });
+map.on('drag', () => {
+  if (!dragC0 || map.latLngToContainerPoint(dragC0).distanceTo(map.getSize().divideBy(2)) < 24) return;
+  dragC0 = null;
+  if (!document.activeElement?.matches?.(TEXT_IN)) setDrawer('min');
+});
+
 // ---------- 筛选面板 ----------
 $('#filterBtn').onclick = () => {
   const p = $('#filterPanel');
   p.hidden = !p.hidden;
   $('#filterBtn').innerHTML = p.hidden ? '筛选 <b>+</b>' : '筛选 <b>−</b>';
   if (!p.hidden) renderChips();
+  document.body.classList.toggle('filter-open', !p.hidden);
+  if (!p.hidden && isMobile()) setDrawer('min'); // 手机上让出空间给筛选面板
+  syncBack();
 };
 $('#busGate').checked = busGate;
 $('#showStops').checked = showStops;
@@ -373,17 +391,22 @@ map.on('moveend', () => {
 map.on('zoomend', renderVehicles);
 
 // ---------- 抽屉与标签 ----------
-const DRAWER = { min: 96, half: () => innerHeight * 0.45, full: () => innerHeight * 0.88 };
-let drawerState = 'half';
+// min 按实际高度算：把手 + 标签栏 + 底部安全区
+const DRAWER = {
+  min: () => $('#handle').offsetHeight + $('#tabs').offsetHeight + (parseFloat(getComputedStyle($('#drawer')).paddingBottom) || 0),
+  half: () => innerHeight * 0.45, full: () => innerHeight * 0.88,
+};
+let drawerState = 'half', drawerPx = 0;
 function setDrawer(state) {
   drawerState = state;
-  const h = state === 'min' ? DRAWER.min : state === 'half' ? DRAWER.half() : DRAWER.full();
-  document.documentElement.style.setProperty('--drawer-h', h + 'px');
+  drawerPx = state === 'min' ? DRAWER.min() : state === 'half' ? DRAWER.half() : DRAWER.full();
+  document.documentElement.style.setProperty('--drawer-h', drawerPx + 'px');
 }
 function showTab(name) {
   for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.tab === name);
   for (const s of document.querySelectorAll('#panes section')) s.classList.toggle('on', s.dataset.pane === name);
   ls.set('tab', name);
+  if (name !== 'stop' && name !== 'veh') returnTab = name;
   if (isMobile() && drawerState === 'min') setDrawer('half');
   if (name !== 'veh' && selected?.follow) setFollow(false); // 去看站点、规划路线时不抢地图
 }
@@ -395,21 +418,46 @@ $('#handle').onclick = () => setDrawer(drawerState === 'min' ? 'half' : drawerSt
   $('#handle').addEventListener('pointerdown', e => { startY = e.clientY; startH = $('#drawer').getBoundingClientRect().height; moved = false; $('#drawer').classList.add('dragging'); e.target.setPointerCapture(e.pointerId); });
   $('#handle').addEventListener('pointermove', e => {
     if (startY == null) return;
-    const h = Math.min(DRAWER.full(), Math.max(DRAWER.min, startH + startY - e.clientY));
+    const h = Math.min(DRAWER.full(), Math.max(DRAWER.min(), startH + startY - e.clientY));
     if (Math.abs(startY - e.clientY) > 5) moved = true;
     document.documentElement.style.setProperty('--drawer-h', h + 'px');
   });
-  $('#handle').addEventListener('pointerup', e => {
+  const end = () => {
     $('#drawer').classList.remove('dragging');
     if (startY == null) return;
     const h = $('#drawer').getBoundingClientRect().height;
     startY = null;
     if (!moved) return;
-    const opts = [['min', DRAWER.min], ['half', DRAWER.half()], ['full', DRAWER.full()]];
+    const opts = [['min', DRAWER.min()], ['half', DRAWER.half()], ['full', DRAWER.full()]];
     setDrawer(opts.sort((a, b) => Math.abs(a[1] - h) - Math.abs(b[1] - h))[0][0]);
     $('#handle').onclick = null; setTimeout(() => { $('#handle').onclick = () => setDrawer(drawerState === 'min' ? 'half' : drawerState === 'half' ? 'full' : 'min'); }, 0);
-  });
+  };
+  $('#handle').addEventListener('pointerup', end);
+  $('#handle').addEventListener('pointercancel', end); // 被系统手势打断时也要收尾
 })();
+
+// 手机键盘：抽屉里的输入框聚焦时展开到最高，失焦后恢复
+let kbPrev = null, kbTimer;
+$('#drawer').addEventListener('focusin', e => {
+  if (!isMobile() || !e.target.matches(TEXT_IN)) return;
+  clearTimeout(kbTimer);
+  if (kbPrev == null) kbPrev = drawerState;
+  if (drawerState !== 'full') setDrawer('full');
+  $('#panes').scrollTop = 0;
+  setTimeout(() => scrollTo(0, 0), 350); // iOS 可能已把页面上推
+});
+$('#drawer').addEventListener('focusout', () => {
+  if (kbPrev == null) return;
+  kbTimer = setTimeout(() => {
+    if (document.activeElement?.matches?.(TEXT_IN)) return;
+    if (drawerState === 'full' && kbPrev !== 'full') setDrawer(kbPrev);
+    kbPrev = null;
+  }, 300);
+});
+if (window.visualViewport) visualViewport.addEventListener('resize', () => {
+  const kb = visualViewport.scale > 1.01 ? 0 : innerHeight - visualViewport.height;
+  document.documentElement.style.setProperty('--kb', (kb > 120 ? Math.round(kb) : 0) + 'px');
+});
 $('#legendToggle').onclick = () => $('#legend').classList.toggle('open');
 
 // ---------- 搜索 ----------
@@ -442,6 +490,7 @@ function selectStop(s, { pan = true } = {}) {
   $('#remindForm').innerHTML = '';
   showTab('stop');
   loadArrivals();
+  syncBack();
 }
 
 function stopTitle(s) {
@@ -649,6 +698,37 @@ async function loadGoExtra() {
   $('#goAlerts').innerHTML = (al.alerts || []).slice(0, 5).map(a => `<div class="alert"><b>${esc(a.subject)}</b><br>${esc(a.body).slice(0, 300)}</div>`).join('') || '<div class="empty">暂无公告</div>';
 }
 
+// ---------- 手机返回键：先关面板，再退出 ----------
+// 历史里最多一条占位记录；用界面按钮关完所有面板时把它退掉
+let backArmed = !!history.state?.overlay, skipPop = 0, returnTab = 'near';
+const hasOverlay = () => isMobile() && (!$('#filterPanel').hidden || !!selected || !!selectedStop);
+function syncBack() {
+  const want = hasOverlay();
+  if (want && !backArmed) { history.pushState({ overlay: 1 }, ''); backArmed = true; }
+  else if (!want && backArmed) { backArmed = false; skipPop++; history.back(); }
+}
+function clearStop() {
+  selectedStop = null;
+  if (stopPin) { map.removeLayer(stopPin); stopPin = null; }
+  $('#remindForm').innerHTML = '';
+  $('#arrivals').innerHTML = '<div class="hint">在地图上点站点，或搜索站点。</div>';
+  syncBack();
+}
+function closeTop() {
+  if (!$('#filterPanel').hidden) return $('#filterBtn').click();
+  const tab = document.querySelector('#tabs button.on')?.dataset.tab, st = drawerState;
+  if (selectedStop && (tab === 'stop' || !selected)) { clearStop(); showTab(selected ? 'veh' : returnTab); }
+  else if (selected) { clearVehicle(); showTab(selectedStop ? 'stop' : returnTab); }
+  setDrawer(st); // showTab 会把 min 升到 half，这里还原
+}
+addEventListener('popstate', () => {
+  if (skipPop) { skipPop--; return; }
+  if (!backArmed) return;
+  backArmed = false;
+  closeTop(); // 还有下一层时，里面的 syncBack 会重新占位
+});
+syncBack(); // 刷新后如果停在占位记录上，把它退掉
+
 // ---------- 刷新循环 ----------
 let retryTimer;
 async function tick() {
@@ -678,8 +758,8 @@ async function tick() {
     const [ag, id] = [sp.slice(0, sp.indexOf(':')), sp.slice(sp.indexOf(':') + 1)];
     api(`/api/stops/search?q=${encodeURIComponent(id)}&agencies=${ag}&limit=5`).then(l => {
       const s = l.find(x => x.id === id) || l[0];
+      history.replaceState(history.state, '', '/'); // 先清 URL，再选站（选站会占一条返回记录）
       if (s) selectStop(s);
-      history.replaceState(null, '', '/');
     }).catch(() => {});
   }
   setInterval(tick, REFRESH_MS);
