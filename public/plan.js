@@ -35,54 +35,147 @@ function myPosition() {
   });
 }
 
+// 最近用过的地点：只存在本机 localStorage，最多 5 条
+const RECENT_KEY = 'recentPlaces';
+const recentPlaces = () => {
+  const v = ls.get(RECENT_KEY, []);
+  return Array.isArray(v) ? v.filter(p => p && typeof p.label === 'string' && Number.isFinite(p.lat) && Number.isFinite(p.lon)) : [];
+};
+const placeKey = p => `${p.label}|${(+p.lat).toFixed(5)},${(+p.lon).toFixed(5)}`; // 对向站同名，要带坐标
+function rememberPlace(p) {
+  const item = { label: p.label, sub: p.sub || '', lat: +(+p.lat).toFixed(5), lon: +(+p.lon).toFixed(5) };
+  try { ls.set(RECENT_KEY, [item, ...recentPlaces().filter(x => placeKey(x) !== placeKey(item))].slice(0, 5)); } catch {}
+}
+function clearRecentPlaces() { try { localStorage.removeItem(RECENT_KEY); } catch {} }
+
 function bindPlaceInput(which) {
   const input = $(which === 'from' ? '#planFrom' : '#planTo');
   const ul = $(which === 'from' ? '#sugFrom' : '#sugTo');
-  let timer, items = [];
-  const fixed = () => [
-    { label: '📍 我的位置', special: 'me' },
-    { label: '🗺 地图中心', special: 'center' },
-  ];
-  const render = () => {
-    ul.innerHTML = items.map((x, i) => `<li data-i="${i}">${esc(x.label)}${x.sub ? ` <span class="code">${esc(x.sub)}</span>` : ''}</li>`).join('');
+  // timer：输入防抖；seq：每次输入/关闭 +1，晚到的旧请求结果直接丢弃；pendingQ：已发出、结果还没回来的关键词
+  let timer, blurTimer, seq = 0, act = -1, items = [], pendingQ = null;
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-controls', ul.id);
+  input.setAttribute('aria-expanded', 'false');
+  ul.setAttribute('role', 'listbox');
+
+  const note = label => ({ label, special: 'none' }); // 灰色提示行，不可点
+  const selectable = x => !!x && x.special !== 'none';
+  const idle = () => {
+    const recent = recentPlaces();
+    return [
+      { label: '📍 我的位置', special: 'me' },
+      { label: '🗺 地图中心', special: 'center' },
+      ...recent.map(p => ({ ...p, recent: true })),
+      ...(recent.length ? [{ label: '清除最近地点', special: 'clear' }] : []),
+    ];
   };
-  input.addEventListener('focus', () => { if (!input.value) { items = fixed(); render(); } });
+  const render = () => {
+    ul.innerHTML = items.map((x, i) => {
+      const cls = [x.special === 'none' && 'note', x.special === 'clear' && 'clear', i === act && 'act'].filter(Boolean).join(' ');
+      return `<li id="sug-${which}-${i}" role="option" data-i="${i}"${cls ? ` class="${cls}"` : ''} aria-selected="${i === act}">${x.recent ? '🕘 ' : ''}${esc(x.label)}${x.sub ? ` <span class="code">${esc(x.sub)}</span>` : ''}</li>`;
+    }).join('');
+    input.setAttribute('aria-expanded', String(items.length > 0));
+    if (act >= 0) input.setAttribute('aria-activedescendant', `sug-${which}-${act}`); else input.removeAttribute('aria-activedescendant');
+  };
+  const show = list => { items = list; act = -1; ul.classList.remove('busy'); render(); };
+  const close = () => { seq++; clearTimeout(timer); pendingQ = null; show([]); };
+  // 键盘高亮项滚进列表可视区（不用 scrollIntoView，手机上会带动整页）
+  const keepVisible = () => {
+    const li = ul.children[act];
+    if (!li) return;
+    if (li.offsetTop < ul.scrollTop) ul.scrollTop = li.offsetTop;
+    else if (li.offsetTop + li.offsetHeight > ul.scrollTop + ul.clientHeight) ul.scrollTop = li.offsetTop + li.offsetHeight - ul.clientHeight;
+  };
+
+  async function choose(i) {
+    const x = items[i];
+    if (!selectable(x)) return;
+    if (x.special === 'clear') { clearRecentPlaces(); return show(idle()); }
+    if (x.special === 'center') {
+      const c = map.getCenter();
+      setPlace(which, { label: '地图中心', lat: c.lat, lon: c.lng });
+      close(); return input.blur();
+    }
+    if (x.special === 'me') {
+      close();
+      input.value = '定位中…';
+      // 定位权限弹窗可能让输入框失焦，所以不用 seq 判断；只在用户改了输入框时丢弃结果
+      try {
+        const [lat, lon] = await myPosition();
+        if (input.value !== '定位中…') return;
+        setPlace(which, { label: '我的位置', lat, lon }); input.blur();
+      } catch (err) {
+        if (input.value !== '定位中…') return;
+        plan[which] = null; input.value = '';
+        show([note(err.message || '拿不到位置，可以用地图中心')]);
+      }
+      return;
+    }
+    rememberPlace(x);
+    setPlace(which, { label: x.label, lat: x.lat, lon: x.lon });
+    close(); input.blur();
+  }
+
+  input.addEventListener('focus', () => { clearTimeout(blurTimer); if (!input.value) show(idle()); });
   input.addEventListener('input', () => {
     plan[which] = null;
     clearTimeout(timer);
+    const my = ++seq;
     const q = input.value.trim();
-    if (q.length < 2) { items = fixed(); render(); return; }
+    if (q.length < 2) { pendingQ = null; return show(idle()); }
+    pendingQ = q;
+    // 加载中：有旧结果就把旧结果变淡（不插行，免得列表下移导致误点）；没有才显示「搜索中…」
+    // 同时清掉键盘高亮，免得结果回来前按 Enter 选中上一个关键词的旧结果
+    if (items.some(x => !x.special)) { act = -1; render(); ul.classList.add('busy'); }
+    else { items = [note('搜索中…')]; act = -1; render(); }
     timer = setTimeout(async () => {
+      const safe = p => p.then(v => (Array.isArray(v) ? { v } : { err: new Error('bad_response') }), err => ({ err }));
       const [geo, stops] = await Promise.all([
-        api(`/api/geocode?q=${encodeURIComponent(q)}`).catch(() => []),
-        api(`/api/stops/search?q=${encodeURIComponent(q)}&limit=4&agencies=${[...enabled].join(',')}`).catch(() => []),
+        safe(api(`/api/geocode?q=${encodeURIComponent(q)}`)),
+        safe(api(`/api/stops/search?q=${encodeURIComponent(q)}&limit=4&agencies=${[...enabled].join(',')}`)),
       ]);
-      items = [
-        ...stops.map(s => ({ label: s.name, sub: `${agencies.find(a => a.id === s.agency)?.name || s.agency} #${s.code || s.id}`, lat: s.lat, lon: s.lon })),
-        ...(Array.isArray(geo) ? geo : []).map(g => ({ label: g.name, sub: g.area, lat: g.lat, lon: g.lon })),
-      ];
-      if (!items.length) items = [{ label: '没找到，换个说法试试', special: 'none' }];
-      render();
+      if (my !== seq || input.value.trim() !== q || document.activeElement !== input) return;
+      pendingQ = null;
+      const ql = q.toLowerCase();
+      const recent = recentPlaces().filter(p => p.label.toLowerCase().includes(ql)).map(p => ({ ...p, recent: true }));
+      const seen = new Set(recent.map(placeKey));
+      const found = [
+        ...(stops.v || []).map(s => ({ label: s.name, sub: `${agencies.find(a => a.id === s.agency)?.name || s.agency} #${s.code || s.id}`, lat: s.lat, lon: s.lon })),
+        ...(geo.v || []).map(g => ({ label: g.name, sub: g.area, lat: g.lat, lon: g.lon })),
+      ].filter(x => !seen.has(placeKey(x)));
+      const list = [...recent, ...found];
+      const limited = [geo, stops].some(r => r.err?.message === 'HTTP 429');
+      if (!list.length) {
+        return show([note(limited ? '查询太频繁，稍等几秒再试' : geo.err || stops.err ? '网络出错，稍后再试' : '没找到，换个说法试试')]);
+      }
+      if (limited) list.push(note('查询太频繁，部分结果没显示，稍等几秒再试'));
+      else if (geo.err) list.push(note('地址搜索暂时不可用，只显示站点'));
+      else if (stops.err) list.push(note('站点搜索暂时不可用，只显示地址'));
+      show(list);
     }, 350);
+  });
+  input.addEventListener('keydown', e => {
+    if (e.isComposing || e.keyCode === 229 || !ul.childElementCount) return; // 输入法组字中，或列表没显示
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const sel = items.flatMap((x, i) => (selectable(x) ? [i] : []));
+      if (!sel.length) return;
+      const pos = sel.indexOf(act);
+      act = e.key === 'ArrowDown' ? sel[(pos + 1) % sel.length] : sel[pos <= 0 ? sel.length - 1 : pos - 1];
+      render(); keepVisible();
+    } else if (e.key === 'Enter') {
+      // 没有高亮时，只在当前关键词的结果已返回后选第一项，避免选到旧结果或误触定位
+      const i = act >= 0 ? act : pendingQ == null && input.value.trim().length >= 2 ? items.findIndex(x => !x.special) : -1;
+      if (i >= 0) { e.preventDefault(); choose(i); }
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); close();
+    }
   });
   // 按下候选项时不让输入框失焦：否则手机键盘先收起、抽屉跟着下移，手指会点空
   ul.addEventListener('mousedown', e => e.preventDefault());
-  ul.addEventListener('click', async e => {
-    const li = e.target.closest('li[data-i]');
-    if (!li) return;
-    const x = items[+li.dataset.i];
-    if (x.special === 'none') return;
-    if (x.special === 'center') { const c = map.getCenter(); setPlace(which, { label: '地图中心', lat: c.lat, lon: c.lng }); return input.blur(); }
-    if (x.special === 'me') {
-      input.value = '定位中…';
-      try { const [lat, lon] = await myPosition(); setPlace(which, { label: '我的位置', lat, lon }); input.blur(); }
-      catch (err) { input.value = ''; ul.innerHTML = `<li>${esc(err.message || '拿不到位置，可以用地图中心')}</li>`; }
-      return;
-    }
-    setPlace(which, { label: x.label, lat: x.lat, lon: x.lon });
-    input.blur();
-  });
-  input.addEventListener('blur', () => setTimeout(() => { ul.innerHTML = ''; }, 200));
+  ul.addEventListener('click', e => { const li = e.target.closest('li[data-i]'); if (li) choose(+li.dataset.i); });
+  input.addEventListener('blur', () => { clearTimeout(blurTimer); blurTimer = setTimeout(close, 200); });
 }
 bindPlaceInput('from');
 bindPlaceInput('to');

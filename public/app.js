@@ -466,7 +466,9 @@ $('#drawer').addEventListener('focusout', () => {
 // 算出被挡的底部高度写进 --kb，CSS 用它把抽屉抬到键盘上方；--vvh 限制抽屉和候选列表的高度。
 function syncKb() {
   const vv = window.visualViewport, st = document.documentElement.style;
-  const occ = !vv || vv.scale > 1.01 ? 0 : innerHeight - (vv.offsetTop + vv.height);
+  // 只管抽屉里的输入框：顶部站点搜索弹键盘时抽屉不动，否则会盖住顶部的搜索结果
+  const inDrawer = !!document.activeElement?.closest?.('#drawer');
+  const occ = !vv || vv.scale > 1.01 || !inDrawer ? 0 : innerHeight - (vv.offsetTop + vv.height);
   if (occ > 120) {
     st.setProperty('--kb', Math.round(occ) + 'px'); st.setProperty('--vvh', Math.round(vv.height) + 'px');
   }

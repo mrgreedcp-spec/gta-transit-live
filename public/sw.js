@@ -1,6 +1,6 @@
 // 外壳缓存：网络优先，3 秒超时或失败时用缓存。/api/ 和跨域（地图瓦片）不处理。
 // 改了前端文件就把 VERSION 加 1。
-const VERSION = 'v7';
+const VERSION = 'v8';
 const CACHE = `gta-shell-${VERSION}`;
 const SHELL = [
   '/', '/app.js', '/plan.js', '/push.js', '/style.css', '/manifest.webmanifest',
