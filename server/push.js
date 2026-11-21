@@ -37,15 +37,23 @@ export async function initPush(getArrivals) {
   if (!vapid) { pushState.reason = '云端未配置 VAPID 密钥'; return; }
   if (!kvPersistent) { pushState.reason = '云端未配置 Upstash，提醒无法持久保存'; return; }
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'https://github.com/mrgreedcp-spec/gta-transit-live', vapid.publicKey, vapid.privateKey);
+  await loadDevices();
+}
+
+// 从存储载入全部设备。冷启动时 Upstash 偶尔超时：失败就 30 秒后重试，不让推送整段停掉。
+export const RETRY_MS = 30000;
+async function loadDevices() {
   try {
     const ids = (await kvGet('push:index')) || [];
     for (const id of ids) { const d = await kvGet('push:dev:' + id); if (d) devices.set(id, d); }
     ready = true;
-    pushState.enabled = true;
+    pushState.enabled = true; pushState.reason = '';
     console.log(`[push] 已启用，设备 ${devices.size} 台`);
     setInterval(() => check().catch(e => { pushState.lastError = e.message; }), 30000).unref();
   } catch (e) {
     pushState.reason = `存储不可用：${e.message}`;
+    console.log(`[push] 载入设备失败，${RETRY_MS / 1000} 秒后重试：${e.message}`);
+    setTimeout(loadDevices, RETRY_MS);
   }
 }
 
@@ -111,6 +119,13 @@ export function digestSchedule() {
     if (g?.enabled && g.stops?.length) seen.set(`${g.at}|${g.days.join(',')}`, { at: g.at, days: [...g.days] });
   }
   return [...seen.values()].sort((x, y) => (x.at + x.days).localeCompare(y.at + y.days));
+}
+
+// 只给计数，排查用：设备数、有摘要设置的、已开启的、已开启且有收藏站的
+export function digestStats() {
+  const all = [...devices.values()].map(d => d.digest).filter(Boolean);
+  return { devices: devices.size, digests: all.length, enabled: all.filter(g => g.enabled).length,
+    ready: all.filter(g => g.enabled && g.stops?.length).length };
 }
 
 async function digestPayload(dg) {

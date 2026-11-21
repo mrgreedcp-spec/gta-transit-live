@@ -7,7 +7,7 @@ import zlib from 'node:zlib';
 import { handleAuth, authEnabled } from './auth.js';
 import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
-import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule } from './push.js';
+import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule, digestStats } from './push.js';
 import { kvStatus } from './kv.js';
 
 async function readJson(req, limit = 16384) {
@@ -271,7 +271,7 @@ function notifyAuth(req, res, method) {
 // GET /api/notify/schedule：每日收藏摘要的时间表，Mac 据此在到点前 5 分钟叫醒服务器
 async function handleNotifySchedule(req, res) {
   if (!notifyAuth(req, res, 'GET')) return;
-  try { return send(res, 200, { schedule: digestSchedule() }); } catch (e) { return send(res, e.code || 500, { error: e.message }); }
+  try { return send(res, 200, { schedule: digestSchedule(), stats: digestStats() }); } catch (e) { return send(res, e.code || 500, { error: e.message }); }
 }
 
 async function handleNotify(req, res) {

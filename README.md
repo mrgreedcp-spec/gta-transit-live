@@ -109,7 +109,7 @@ npm start
 
 ## GO API key
 
-1. 已于 2026-11-15 提交申请（https://api.openmetrolinx.com/OpenDataAPI/Help/Registration/en ），人工审批最长 10 个工作日，key 发到申请邮箱。
+1. 2026-11-15 提交申请，2026-11-21 已批下，key 已存进本机钥匙串 `go-api-key`（2026-11-21 验证可用）。申请地址（https://api.openmetrolinx.com/OpenDataAPI/Help/Registration/en ），人工审批最长 10 个工作日，key 发到申请邮箱。
    协议要点：不能用 GO/Metrolinx 品牌、不能暗示官方、不能通过自己的公开 API 再分发 GO 数据。
 2. 收到 key 后存进钥匙串（推荐）：
 
