@@ -71,7 +71,9 @@ function visibleVehicles() {
 
 // ---------- 平滑移动 ----------
 const motion = new Map(); // key -> { fLat, fLon, tLat, tLon, t0, dur, at }
-let activeUntil = 0, settled = true, lastDom = 0, lastCv = 0;
+let activeUntil = 0, settled = true, lastDom = 0, lastCv = 0, rafOn = false;
+// 只在有车在补间时跑逐帧循环；车都停稳就停下，手机更省电
+const kickAnim = () => { if (!rafOn) { rafOn = true; requestAnimationFrame(animateFrame); } };
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 function posOf(key, v, now = performance.now()) {
@@ -97,13 +99,14 @@ function updateMotion(vehicles) {
     if (!jump) { activeUntil = Math.max(activeUntil, now + TWEEN_MS); settled = false; }
   }
   for (const k of motion.keys()) if (!seen.has(k)) motion.delete(k);
+  if (!settled) kickAnim();
 }
 
 function animateFrame(now) {
-  requestAnimationFrame(animateFrame);
-  if (map._animatingZoom) return;
+  if (map._animatingZoom) { requestAnimationFrame(animateFrame); return; }
   const live = now <= activeUntil;
-  if (!live && settled) return;
+  if (!live && settled) { rafOn = false; return; }
+  requestAnimationFrame(animateFrame);
   const domStep = !live || now - lastDom >= DOM_STEP_MS, cvStep = !live || now - lastCv >= CV_STEP_MS;
   if (!domStep && !cvStep) return;
   if (domStep) lastDom = now;
@@ -115,7 +118,6 @@ function animateFrame(now) {
   }
   settled = !live;
 }
-requestAnimationFrame(animateFrame);
 
 function bearingOf(v, key) {
   if (v.bearing != null) return v.bearing;
