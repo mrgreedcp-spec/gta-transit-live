@@ -36,6 +36,9 @@ th { color: var(--ink2); font-weight: 500; font-size: 12px; border-top: 0; }
 details summary { color: var(--accent); cursor: pointer; font-size: 13px; margin-top: 8px; }
 .hint { color: var(--ink2); font-size: 12px; line-height: 1.6; }
 code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+.fb { border-top: 1px solid var(--line); padding: 10px 0; } .fb:first-child { border-top: 0; }
+.fb .t { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; line-height: 1.5; }
+.fb .m { color: var(--ink2); font-size: 12px; } .fb .c { font-size: 13px; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -52,6 +55,7 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
     <details><summary>数据表</summary><table id="dauTable"></table></details></section>
   <section class="card"><h2>渠道来源</h2><div class="sub">激活 = 收藏了站点或建了到站提醒</div><table id="chTable"></table>
     <p class="hint">推广链接后面加 <code>?ref=渠道名</code>（小写字母、数字、- 或 _，最多 20 位），例如 <code>/?ref=xhs</code>。打开链接后 30 天内注册都算这个渠道；没带或换了浏览器的算「未知」；这个功能上线前注册的账号也都算在「未知」里。</p></section>
+  <section class="card"><h2>用户反馈</h2><div class="sub" id="fbSub"></div><div id="fbList"></div></section>
 </template>
 <script src="/admin.js" defer></script>
 </body>

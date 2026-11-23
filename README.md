@@ -171,3 +171,9 @@ Data used in this product or service is provided with the permission of Metrolin
   - 活跃 = 当天以登录状态打开过 App。活跃记录先存内存，每 10 分钟和服务退出前写入存储。日期按多伦多时间。
   - 激活 = 收藏了站点或开了到站提醒。
 - 回滚：删掉 `ACCOUNTS` 就回到共享访问密码模式。
+
+## 意见反馈
+
+- 地图右上角「💬 反馈」和状态页都能打开反馈表单；内容存在 KV 键 `feedback:list`（最多 500 条，不存 IP）。
+- 账号模式下管理员在 `/admin` 最下面查看；旧模式没有查看页面，可在 Upstash 控制台看 `gta:feedback:list`。
+- 限流：每 IP 每小时 5 条，全站每小时 60 条。设 `FEEDBACK=0` 关闭。

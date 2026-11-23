@@ -41,6 +41,7 @@ button { font: inherit; }
 
 /* ---------- 筛选 ---------- */
 #filterBtn { top: calc(10px + env(safe-area-inset-top)); right: 10px; }
+#fbBtn { top: calc(10px + env(safe-area-inset-top)); right: 85px; }
 #filterPanel { top: calc(56px + env(safe-area-inset-top)); right: 10px; width: 320px; max-height: 70dvh; overflow-y: auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 16px #0003; padding: 10px 12px; }
 .switch { display: flex; gap: 8px; align-items: center; padding: 5px 0; font-size: 13px; }
 .chip-group { border-top: 1px solid #eee; padding: 8px 0; }
@@ -151,7 +152,7 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
 
 /* ---------- 手机 ---------- */
 @media (max-width: 760px) {
-  #searchBox { left: 10px; right: 84px; width: auto; }
+  #searchBox { left: 10px; right: 166px; width: auto; }
   #filterPanel { left: 10px; right: 10px; width: auto; max-height: 60dvh; }
   #legend { bottom: auto; top: calc(56px + env(safe-area-inset-top)); left: 10px; padding: 0; background: none; box-shadow: none; }
   #legendToggle { display: block; background: #fff; border: 0; border-radius: 16px; padding: 5px 10px; font-size: 12px; box-shadow: 0 2px 8px #0003; }
@@ -231,13 +232,14 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
 /* 按钮、链接、抽屉禁用双击放大，点击无 300ms 延迟 */
 button, a, input, select, label, #drawer, #tabs, .chip { touch-action: manipulation; }
 /* 长按地图、把手、标签不弹出选择/放大镜 */
-#map, #handle, #tabs, .veh-wrap, .chip, #filterBtn, #legendToggle { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+#map, #handle, #tabs, .veh-wrap, .chip, #filterBtn, #fbBtn, #legendToggle { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 /* 防止横屏时 iOS 自动放大字号 */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 /* 横屏刘海：左右避让 */
 @media (max-width: 760px) {
   #searchBox { left: calc(10px + env(safe-area-inset-left)); }
   #filterBtn { right: calc(10px + env(safe-area-inset-right)); }
+  #fbBtn { right: calc(85px + env(safe-area-inset-right)); }
 }
 
 .admin-list { margin-top: 6px; display: grid; gap: 4px; font-size: 13px; }
@@ -250,3 +252,16 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .must-pw[hidden] { display: none; }
 .must-card { background: #fff; padding: 22px; border-radius: 14px; box-shadow: 0 6px 24px #0002; width: min(330px, 88vw); }
 .must-card h3 { margin: 0; } #mustLogout { border: 1px solid #ccc; background: #fff; border-radius: 8px; padding: 8px; }
+/* 意见反馈 */
+.fb-link { display: block; width: 100%; margin: 10px 0; padding: 11px 12px; border: 1px solid #cfe0f3; background: #f4f8fd; color: #0a66c2; border-radius: 10px; font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.fb-link[hidden], #fbBtn[hidden] { display: none; }
+.fb-modal { position: fixed; inset: 0; z-index: 15000; background: #0006; display: flex; justify-content: center; align-items: flex-start; overflow-y: auto;
+  padding: calc(12px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+.fb-modal[hidden] { display: none; }
+.fb-card { width: min(420px, 100%); background: #fff; border-radius: 14px; padding: 16px; display: grid; gap: 8px; box-shadow: 0 6px 24px #0003; }
+.fb-card textarea, .fb-card input { width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 9px 10px; border: 1px solid #ccc; border-radius: 8px; }
+.fb-card textarea { min-height: 120px; resize: vertical; }
+.fb-head { display: flex; justify-content: space-between; align-items: center; }
+#fbClose { width: 44px; height: 44px; margin: -10px -10px -10px 0; border: 0; background: none; font-size: 18px; color: #666; cursor: pointer; }
+#fbSend:disabled { opacity: .6; }
+@media (min-width: 761px) { .fb-modal { padding-top: 12vh; } }

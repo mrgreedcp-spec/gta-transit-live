@@ -26,6 +26,7 @@
 
 <!-- 右上：筛选 -->
 <button id="filterBtn" class="float pill" type="button">筛选 <b>+</b></button>
+<button id="fbBtn" class="float pill" type="button" hidden>💬 反馈</button>
 <div id="filterPanel" class="float" hidden>
   <div class="fp-row">
     <label class="switch"><input type="checkbox" id="busGate"> 缩小时只显示火车（放大到 12 级显示公交）</label>
@@ -130,6 +131,7 @@
         <div id="adminMsg" class="hint"></div>
         <div class="acct-row"><a href="/admin">增长仪表盘 →</a></div>
       </div>
+      <button id="fbLink" class="fb-link" type="button" hidden>💬 意见反馈：哪里不好用、想要什么功能 →</button>
       <details id="installGuide" class="guide">
         <summary>装成手机 App（添加到主屏幕）</summary>
         <h4>iPhone（Safari，iOS 16.4 以上）</h4>
@@ -161,6 +163,15 @@
   </div>
 </aside>
 
+<div id="fbModal" class="fb-modal" hidden>
+  <form id="fbForm" class="fb-card">
+    <div class="fb-head"><b>意见反馈</b><button type="button" id="fbClose" aria-label="关闭">✕</button></div>
+    <textarea id="fbText" maxlength="1000" rows="5" placeholder="哪里不好用、想要什么功能、哪条线路数据不对，都可以写" required></textarea>
+    <input id="fbContact" maxlength="100" autocomplete="off" placeholder="留微信或邮箱方便回复（选填）">
+    <button type="submit" id="fbSend" class="primary">提交</button>
+    <div id="fbMsg" class="hint"></div>
+  </form>
+</div>
 <div id="mustPw" class="must-pw" hidden>
   <form id="mustForm" class="pw-form must-card">
     <h3>请设置新密码</h3>

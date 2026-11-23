@@ -67,6 +67,27 @@ function table(t, head, rows) {
   const tb = el('tbody', null, t); rows.forEach(r => { const row = el('tr', null, tb); r.forEach(c => el('td', String(c), row)); });
 }
 
+// 用户反馈卡片：数据和增长图一起取，resize 重绘时一起画
+let lastFb = null;
+const TAB_NAMES = { plan: '路线', near: '附近', favs: '收藏', stop: '到站', veh: '车辆', status: '状态' };
+const fbTime = ms => new Date(ms).toLocaleString('zh-CN', { timeZone: 'America/Toronto', year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+function renderFb() {
+  const box = $('#fbList'); if (!box) return;
+  box.textContent = '';
+  if (!lastFb || lastFb.error) { $('#fbSub').textContent = '反馈载入失败，点「刷新」重试。'; return; }
+  $('#fbSub').textContent = lastFb.total ? `共 ${lastFb.total} 条，显示最近 ${lastFb.items.length} 条（多伦多时间）` : '';
+  if (!lastFb.items.length) { el('div', '还没有反馈。', box, 'hint'); return; }
+  for (const f of lastFb.items) {
+    const row = el('div', null, box, 'fb');
+    el('div', `${fbTime(f.at)} · ${f.user || '匿名'}`, row, 'm');
+    el('div', f.text, row, 't');
+    if (f.contact) el('div', `联系方式：${f.contact}`, row, 'c');
+    const c = f.ctx || {};
+    const ctx = [c.tab && `在「${TAB_NAMES[c.tab] || c.tab}」页`, c.ver, c.standalone ? '主屏 App' : '浏览器', c.w ? `屏宽 ${c.w}` : ''].filter(Boolean).join(' · ');
+    if (ctx) el('div', ctx, row, 'm');
+  }
+}
+
 let last = null;
 function render(g) {
   last = g;
@@ -88,10 +109,13 @@ function render(g) {
   table($('#dauTable'), ['日期', '活跃账号'], [...g.dau].reverse().map(d => [d.date, d.n ?? '—']));
   table($('#chTable'), ['渠道', '注册', '激活', '激活率'],
     g.channels.length ? g.channels.map(c => [c.ref ?? '未知', c.signups, c.activated, pct(c.activated, c.signups)]) : [['还没有注册', '—', '—', '—']]);
+  renderFb();
 }
 
 async function load() {
-  const r = await fetch('/api/admin/growth', { headers: { accept: 'application/json' }, cache: 'no-store' }).catch(() => null);
+  const opt = { headers: { accept: 'application/json' }, cache: 'no-store' };
+  const [r, f] = await Promise.all([fetch('/api/admin/growth', opt).catch(() => null), fetch('/api/admin/feedback', opt).catch(() => null)]);
+  lastFb = f?.ok ? await f.json().catch(() => ({ error: true })) : { error: true };   // 反馈取不到不影响增长图
   if (r?.status === 401) { location.href = '/login'; return; }
   if (!r?.ok) { $('#main').textContent = ''; el('div', r?.status === 404 ? '没有权限查看。' : '载入失败，请稍后刷新。', $('#main'), 'msg'); return; }
   render(await r.json());

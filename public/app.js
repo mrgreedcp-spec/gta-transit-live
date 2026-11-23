@@ -809,6 +809,7 @@ $('#pwForm').onsubmit = async e => {
 
 async function loadStatus() {
   const r = await api('/api/status');
+  for (const id of ['#fbBtn', '#fbLink']) { const b = $(id); if (b) b.hidden = !r.feedback; }   // 服务端没开反馈（或没持久存储）就不显示入口
   agencies = r.agencies;
   $('#agencies').innerHTML = agencies.map(a => {
     const [cls, txt] = stateText(a.vehicles);
@@ -837,10 +838,50 @@ async function loadGoExtra() {
   $('#goAlerts').innerHTML = (al.alerts || []).slice(0, 5).map(a => `<div class="alert"><b>${esc(a.subject)}</b><br>${esc(a.body).slice(0, 300)}</div>`).join('') || '<div class="empty">暂无公告</div>';
 }
 
+// ---------- 意见反馈 ----------
+// 用 function 声明（会提升）：下面 hasOverlay 在加载时就会调用 fbOpen
+function fbOpen() { const m = $('#fbModal'); return !!m && !m.hidden; }
+function openFeedback() {
+  const m = $('#fbModal'); if (!m) return;
+  m.hidden = false; $('#fbMsg').textContent = '';
+  syncBack();
+  if (!isMobile()) $('#fbText').focus();
+}
+function closeFeedback() {
+  const m = $('#fbModal'); if (!m || m.hidden) return;
+  m.hidden = true; document.activeElement?.blur?.();
+  syncBack();
+}
+// 当前缓存的 App 版本（gta-shell-vNN 里最大的那个）
+async function appVer() {
+  try { return (await caches.keys()).map(k => /^gta-shell-(v\d+)$/.exec(k)?.[1]).filter(Boolean).sort((a, b) => +b.slice(1) - +a.slice(1))[0] || ''; }
+  catch { return ''; }
+}
+on('#fbBtn', 'onclick', openFeedback);
+on('#fbLink', 'onclick', openFeedback);
+on('#fbClose', 'onclick', closeFeedback);
+on('#fbModal', 'onclick', e => { if (e.target === e.currentTarget) closeFeedback(); });
+addEventListener('keydown', e => { if (e.key === 'Escape' && fbOpen()) closeFeedback(); });
+on('#fbForm', 'onsubmit', async e => {
+  e.preventDefault();
+  const msg = $('#fbMsg'), btn = $('#fbSend'), text = $('#fbText').value.trim();
+  if (!text) { msg.textContent = '请先写点内容。'; return; }
+  btn.disabled = true; msg.textContent = '提交中…';
+  try {
+    const ctx = { tab: document.querySelector('#tabs button.on')?.dataset.tab || '', ver: await appVer(),
+      standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true, w: innerWidth };
+    const r = await fetch('/api/feedback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, contact: $('#fbContact').value.trim(), ctx }) }).catch(() => null);
+    if (r?.status === 401) { location.href = '/login'; return; }
+    if (r?.ok) { $('#fbForm').reset(); msg.textContent = '谢谢，已收到！'; return; }
+    const j = await r?.json().catch(() => ({})) || {};
+    msg.textContent = { rate_limited: '提交太频繁，过一会儿再试。', too_long: '内容太长，请删到 1000 字以内。' }[j.error] || '没提交成功，请稍后再试。';
+  } finally { btn.disabled = false; }
+});
+
 // ---------- 手机返回键：先关面板，再退出 ----------
 // 历史里最多一条占位记录；用界面按钮关完所有面板时把它退掉
 let backArmed = !!history.state?.overlay, skipPop = 0, returnTab = 'near';
-const hasOverlay = () => isMobile() && (!$('#filterPanel').hidden || !!selected || !!selectedStop);
+const hasOverlay = () => isMobile() && (fbOpen() || !$('#filterPanel').hidden || !!selected || !!selectedStop);
 function syncBack() {
   const want = hasOverlay();
   if (want && !backArmed) { history.pushState({ overlay: 1 }, ''); backArmed = true; }
@@ -854,6 +895,7 @@ function clearStop() {
   syncBack();
 }
 function closeTop() {
+  if (fbOpen()) return closeFeedback();
   if (!$('#filterPanel').hidden) return $('#filterBtn').click();
   const tab = document.querySelector('#tabs button.on')?.dataset.tab, st = drawerState;
   if (selectedStop && (tab === 'stop' || !selected)) { clearStop(); showTab(selected ? 'veh' : returnTab); }

@@ -10,7 +10,8 @@ import { take, clientKey } from './ratelimit.js';
 import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule, digestStats,
   usePushAccounts, acctRules, acctAddRule, acctDeleteRule, acctGetDigest, acctSetDigest, acctUnsubscribe, acctSendTest, acctSendDigestNow, rebindSession, deviceCountByUser } from './push.js';
 import { kvStatus } from './kv.js';
-import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCookie, clearCookies } from './auth-accounts.js';
+import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCookie, clearCookies, badOrigin } from './auth-accounts.js';
+import { feedbackOn, loadFeedback, feedbackLoaded, addFeedback, feedbackList } from './feedback.js';
 import { logout, changePassword, getFavs, setFavs, isAdmin, renameUser, adminList, adminResetPassword, normalizeName } from './accounts.js';
 import { startGrowth, growthStats, adminAsset } from './growth.js';
 
@@ -195,6 +196,7 @@ async function handleApi(url, res, req) {
         return send(res, 200, { ...list, users: list.users.map(u => ({ ...u, devices: counts[u.id] || 0 })) });
       }
       if (p === '/api/admin/growth' && req.method === 'GET') return send(res, 200, growthStats(req.user.id));
+      if (p === '/api/admin/feedback' && req.method === 'GET') { if (!feedbackLoaded()) await loadFeedback(); return send(res, 200, feedbackList(req.user.id)); }
       if (p === '/api/admin/reset' && req.method === 'POST') {
         if (limited('write') || limited('login')) return;
         const b = (await readJson(req, 2048)) || {};
@@ -203,6 +205,20 @@ async function handleApi(url, res, req) {
       }
     } catch (e) { return send(res, e.code || 500, { error: e.message }); }
     return send(res, 404, { error: 'not found' });
+  }
+  // 用户反馈：两种登录模式都能提交（走到这里已经过了登录校验）
+  if (p === '/api/feedback') {
+    if (!feedbackOn()) return send(res, 404, { error: 'not found' });
+    if (req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
+    if (badOrigin(req)) return send(res, 403, { error: 'bad_origin' });   // 旧模式 auth.js 不查来源，这里补上
+    if (limited('write')) return;
+    try {
+      const b = (await readJson(req, 8192)) || {};
+      return send(res, 200, await addFeedback({ text: b.text, contact: b.contact, ctx: b.ctx, user: req.user?.name || null, ip: who }));
+    } catch (e) {
+      if (e.retryAfter) res.setHeader('retry-after', String(e.retryAfter));
+      return send(res, e.code || 500, { error: e.code ? e.message : 'server_error' });
+    }
   }
   if (p.startsWith('/api/account/') || p === '/api/favs') {
     if (!req.user) return send(res, 404, { error: 'not found' });   // 旧模式（共享密码）没有账号接口；前端据此判断
@@ -233,7 +249,7 @@ async function handleApi(url, res, req) {
     } catch (e) { return send(res, e.code || 500, e.body || { error: e.message }); }
     return send(res, 404, { error: 'not found' });
   }
-  if (p === '/api/status') return send(res, 200, { ...(await apiStatus()), planner: plannerUsage(), push: { ...pushState }, kv: kvStatus() });
+  if (p === '/api/status') return send(res, 200, { ...(await apiStatus()), planner: plannerUsage(), push: { ...pushState }, kv: kvStatus(), feedback: feedbackOn() });
   if (p.startsWith('/api/push/')) {
     const m = req.method;
     try {
@@ -403,6 +419,7 @@ http.createServer(async (req, res) => {
 });
 
 startAccounts();
+if (feedbackOn()) loadFeedback().catch(() => {});
 usePushAccounts(accountsOn);
 if (accountsOn && normalizeName(process.env.ADMIN_USER || '')) startGrowth().catch(e => console.warn('[growth] 启动失败', e.message));
 
