@@ -152,7 +152,8 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
 
 /* ---------- 手机 ---------- */
 @media (max-width: 760px) {
-  #searchBox { left: 10px; right: 166px; width: auto; }
+  #searchBox { left: 10px; right: 84px; width: auto; }
+  body.fb-on #searchBox { right: 166px; }   /* 反馈按钮显示时才让出位置 */
   #filterPanel { left: 10px; right: 10px; width: auto; max-height: 60dvh; }
   #legend { bottom: auto; top: calc(56px + env(safe-area-inset-top)); left: 10px; padding: 0; background: none; box-shadow: none; }
   #legendToggle { display: block; background: #fff; border: 0; border-radius: 16px; padding: 5px 10px; font-size: 12px; box-shadow: 0 2px 8px #0003; }

@@ -810,6 +810,7 @@ $('#pwForm').onsubmit = async e => {
 async function loadStatus() {
   const r = await api('/api/status');
   for (const id of ['#fbBtn', '#fbLink']) { const b = $(id); if (b) b.hidden = !r.feedback; }   // 服务端没开反馈（或没持久存储）就不显示入口
+  document.body.classList.toggle('fb-on', !!r.feedback && !!$('#fbBtn'));
   agencies = r.agencies;
   $('#agencies').innerHTML = agencies.map(a => {
     const [cls, txt] = stateText(a.vehicles);

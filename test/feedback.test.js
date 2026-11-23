@@ -120,10 +120,32 @@ test('只给管理员看：最新在前，含联系方式；非管理员和未�
   A._reset(); await A.initAccounts();   // 管理员只认启动时已存在的账号
   await F.addFeedback({ text: 'first', contact: 'me@x', ip: '8.8.8.1' }, NOW);
   await F.addFeedback({ text: 'second', ip: '8.8.8.2' }, NOW + 1);
-  const r = F.feedbackList(boss);
+  const r = await F.feedbackList(boss);
   assert.equal(r.total, 2); assert.deepEqual(r.items.map(x => x.text), ['second', 'first']);
   assert.equal(r.items[1].contact, 'me@x');
-  for (const u of [alice, null, undefined]) assert.throws(() => F.feedbackList(u), e => e.code === 404 && e.message === 'not found');
+  for (const u of [alice, null, undefined]) await assert.rejects(F.feedbackList(u), e => e.code === 404 && e.message === 'not found');
+  failGet = true;
+  await assert.rejects(F.feedbackList(boss), e => e.code === 503);   // 读不到：报错，不显示成「没有反馈」
+  failGet = false;
+});
+
+test('同一 IP 并发提交 6 条：只成功 5 条', async () => {
+  fresh(); slow = true;
+  const rs = await Promise.allSettled(Array.from({ length: 6 }, (_, i) => F.addFeedback({ text: 'c' + i, ip: '7.7.7.70' }, NOW)));
+  assert.equal(rs.filter(r => r.status === 'fulfilled').length, 5);
+  assert.equal(rs.find(r => r.status === 'rejected').reason.code, 429);
+  assert.equal(list().length, 5);
+});
+
+test('列表总大小上限 300KB：超出时丢最旧的', async () => {
+  fresh();
+  store.set('feedback:list', Array.from({ length: 400 }, (_, i) => ({ id: 'b' + i, at: i, text: '好'.repeat(1000), contact: '', ctx: {} })));
+  await F.addFeedback({ text: 'newest', ip: '7.7.7.71' }, NOW);
+  const l = list();
+  assert.equal(l[0].text, 'newest');
+  assert.ok(Buffer.byteLength(JSON.stringify(l)) <= 300 * 1024 + 1024);
+  assert.ok(l.length < 401 && l.length > 50);
+  assert.equal(l.at(-1).id, 'b' + (l.length - 2));   // 留下的是最新的那些
 });
 
 test('不存 IP：条目只有约定的字段', async () => {

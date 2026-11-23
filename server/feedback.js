@@ -1,14 +1,16 @@
 // 用户反馈：App 里点「反馈」提交，存在 KV 键 feedback:list（最新在前，最多 500 条），管理员在 /admin 查看。
 // - 旧模式（共享访问密码）和账号模式都能提交；只有账号模式的管理员能看（旧模式只能在 Upstash 控制台看 gta:feedback:list）。
 // - 不存 IP、UA；IP 只在内存里用来限流（每 IP 每小时 5 条，全站每小时 60 条兜底）。
-// - 写入串行，并且每次都先重读 KV 再写：部署时新旧实例并存、或启动时载入失败，都不会用旧列表盖掉别人的反馈。
+// - 写入串行，并且每次都先重读 KV 再写：启动时载入失败也不会用空列表盖掉历史；部署时新旧实例并存，
+//   两边恰好同时提交才可能丢一条（窗口很小）。
+// - 列表总大小上限 300KB（每次提交整表读写一次，控制 Upstash 流量）。管理员查看直接读 KV。
 // - FEEDBACK=0 关闭；没有持久存储（重启就丢）时也自动关闭。
 import crypto from 'node:crypto';
 import { kvGet, kvSet, kvPersistent } from './kv.js';
 import { isAdmin } from './accounts.js';
 
 const KEY = 'feedback:list';
-const MAX_ITEMS = 500, MAX_TEXT = 1000, MAX_CONTACT = 100;
+const MAX_ITEMS = 500, MAX_BYTES = 300 * 1024, MAX_TEXT = 1000, MAX_CONTACT = 100;
 const PER_IP = 5, GLOBAL_MAX = 60, WINDOW_MS = 3600e3;
 const TABS = new Set(['plan', 'near', 'favs', 'stop', 'veh', 'status']);
 const err = (message, code, extra = {}) => Object.assign(new Error(message), { code, ...extra });
@@ -67,7 +69,13 @@ export async function addFeedback({ text, contact, ctx, user = null, ip = '' } =
   const run = chain.then(async () => {
     let cur;
     try { cur = await kvGet(KEY); } catch { throw err('storage_unavailable', 503); }
-    const next = [item, ...(Array.isArray(cur) ? cur : [])].slice(0, MAX_ITEMS);
+    const next = [];
+    let bytes = 0;
+    for (const x of [item, ...(Array.isArray(cur) ? cur : [])].slice(0, MAX_ITEMS)) {   // 超过总大小就丢最旧的
+      bytes += Buffer.byteLength(JSON.stringify(x));
+      if (bytes > MAX_BYTES && next.length) break;
+      next.push(x);
+    }
     try { await kvSet(KEY, next); } catch { throw err('storage_unavailable', 503); }
     list = next; loaded = true;
   });
@@ -76,8 +84,12 @@ export async function addFeedback({ text, contact, ctx, user = null, ip = '' } =
   return { ok: true, id: item.id };
 }
 
-export function feedbackList(actorUid, limit = 200) {
+// 管理员查看：直接读 KV（只给管理员、不轮询），读不到就 503，不把故障显示成「没有反馈」
+export async function feedbackList(actorUid, limit = 200) {
   if (!isAdmin(actorUid)) throw err('not found', 404);
+  let cur;
+  try { cur = await kvGet(KEY); } catch { throw err('storage_unavailable', 503); }
+  list = Array.isArray(cur) ? cur : []; loaded = true;
   return { total: list.length, items: list.slice(0, limit) };
 }
 

@@ -36,7 +36,7 @@ test('旧模式：提交不带用户名；没有查看入口', async () => {
   await F.addFeedback({ text: 'legacy works', ip: '5.5.5.5' });
   const it = store.get('feedback:list')[0];
   assert.equal(it.text, 'legacy works'); assert.equal('user' in it, false);
-  assert.throws(() => F.feedbackList('anyone'), e => e.code === 404);
+  await assert.rejects(F.feedbackList('anyone'), e => e.code === 404);
 });
 
 test('旧模式登录页与原来一致', async () => {

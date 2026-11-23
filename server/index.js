@@ -11,13 +11,14 @@ import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, 
   usePushAccounts, acctRules, acctAddRule, acctDeleteRule, acctGetDigest, acctSetDigest, acctUnsubscribe, acctSendTest, acctSendDigestNow, rebindSession, deviceCountByUser } from './push.js';
 import { kvStatus } from './kv.js';
 import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCookie, clearCookies, badOrigin } from './auth-accounts.js';
-import { feedbackOn, loadFeedback, feedbackLoaded, addFeedback, feedbackList } from './feedback.js';
+import { feedbackOn, loadFeedback, addFeedback, feedbackList } from './feedback.js';
 import { logout, changePassword, getFavs, setFavs, isAdmin, renameUser, adminList, adminResetPassword, normalizeName } from './accounts.js';
 import { startGrowth, growthStats, adminAsset } from './growth.js';
 
 async function readJson(req, limit = 16384) {
-  let data = '';
-  for await (const chunk of req) { data += chunk; if (data.length > limit) throw Object.assign(new Error('body_too_large'), { code: 413 }); }
+  const parts = []; let size = 0;   // 按字节收齐再解码：中文被切在两块数据中间也不会变乱码
+  for await (const chunk of req) { size += chunk.length; if (size > limit) throw Object.assign(new Error('body_too_large'), { code: 413 }); parts.push(Buffer.from(chunk)); }
+  const data = Buffer.concat(parts).toString('utf8');
   try { return JSON.parse(data || '{}'); } catch { throw Object.assign(new Error('bad_json'), { code: 400 }); }
 }
 import { AGENCIES, byId } from './agencies.js';
@@ -196,7 +197,7 @@ async function handleApi(url, res, req) {
         return send(res, 200, { ...list, users: list.users.map(u => ({ ...u, devices: counts[u.id] || 0 })) });
       }
       if (p === '/api/admin/growth' && req.method === 'GET') return send(res, 200, growthStats(req.user.id));
-      if (p === '/api/admin/feedback' && req.method === 'GET') { if (!feedbackLoaded()) await loadFeedback(); return send(res, 200, feedbackList(req.user.id)); }
+      if (p === '/api/admin/feedback' && req.method === 'GET') return send(res, 200, await feedbackList(req.user.id));
       if (p === '/api/admin/reset' && req.method === 'POST') {
         if (limited('write') || limited('login')) return;
         const b = (await readJson(req, 2048)) || {};
