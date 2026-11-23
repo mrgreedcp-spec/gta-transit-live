@@ -96,7 +96,8 @@ export async function initAccounts(attempt = 0) {
     for (const [id, d] of ds) datas.set(id, d);
     Object.assign(acctState, { ready: true, reason: '', users: users.size });
     console.log(`[accounts] 已载入 ${users.size} 个账号`);
-    if (adminName() && !byName.has(adminName())) console.warn(`[accounts] ADMIN_USER=${adminName()} 还没注册：先注册这个账号，否则任何有邀请码的人注册这个名字就成了管理员`);
+    adminUid = byName.get(adminName()) || null;   // 只认启动时已经存在的账号：之后才注册这个名字的人拿不到管理权限
+    if (adminName() && !adminUid) console.warn(`[accounts] ADMIN_USER=${adminName()} 还没注册，管理功能未启用：注册这个账号后重启服务才生效`);
   } catch (e) {
     const wait = RETRY[Math.min(attempt, RETRY.length - 1)];
     acctState.reason = `存储不可用：${e.message}`;
@@ -119,10 +120,11 @@ function withLock(key, fn) {
 // ---------- 会话增删 ----------
 async function saveUser(u) { await kvSet('acct:user:' + u.id, u); users.set(u.id, u); }
 // 在锁内基于最新记录加一个会话。expectHash：调用方验证过的密码哈希；最新记录的密码已经变了就放弃（返回 null）
-function newSession(uid, { expectHash = null, keepOthers = true, pw = null } = {}) {
+function newSession(uid, { expectHash = null, keepOthers = true, pw = null, plain = null } = {}) {
   return withLock('u:' + uid, async () => {
     const u = users.get(uid);
     if (!u || (expectHash && u.pw.hash !== expectHash)) return null;
+    if (plain && plain.toLowerCase() === u.name) throw err('weak_password', 400);   // 期间改了名：新密码不能等于最新的用户名
     const now = Math.floor(Date.now() / 1000), sid = rand(), exp = now + SESSION_S;
     const sessions = [...(keepOthers ? u.sessions.filter(x => x.exp > now) : []), { sid, exp, at: now }].slice(-MAX_SESSIONS);
     const { mustChange, ...rest } = u;   // 换了密码就清掉「必须改密码」
@@ -183,9 +185,10 @@ export async function changePassword(uid, oldPw, newPw, invite) {
   const u = users.get(uid);
   if (!u) throw err('login_required', 401);
   if (typeof oldPw !== 'string' || oldPw.length > 128 || !await verifyPassword(oldPw, u.pw)) throw err('bad_password', 401);
-  if (!passwordOk(newPw, u.name, invite) || (u.mustChange && newPw === oldPw)) throw err('weak_password', 400);   // 临时密码管理员知道，不能沿用
+  if (!passwordOk(newPw, u.name, invite)) throw err('weak_password', 400);
+  if (u.mustChange && await verifyPassword(newPw, u.pw)) throw err('weak_password', 400);   // 临时密码（含全角等写法）管理员知道，不能沿用
   const pw = await hashPassword(newPw);
-  const s = await newSession(uid, { expectHash: u.pw.hash, keepOthers: false, pw });   // 其他设备全部下线，当前设备换新 cookie
+  const s = await newSession(uid, { expectHash: u.pw.hash, keepOthers: false, pw, plain: newPw });   // 其他设备全部下线，当前设备换新 cookie
   if (!s) throw err('bad_password', 409);   // 期间密码已被别处改过
   return s;
 }
@@ -194,7 +197,8 @@ export async function changePassword(uid, oldPw, newPw, invite) {
 // ADMIN_USER / NOTIFY_USER 按用户名配置：这两个账号不能改名，别人也不能改成这两个名字（防止冒名拿到权限）
 const adminName = () => normalizeName(process.env.ADMIN_USER || '');
 const reservedNames = () => new Set([adminName(), normalizeName(process.env.NOTIFY_USER || '')].filter(Boolean));
-export const isAdmin = uid => { const a = adminName(); return !!a && users.get(uid)?.name === a; };
+let adminUid = null;   // initAccounts 载入时确定
+export const isAdmin = uid => { const a = adminName(); return !!a && !!uid && uid === adminUid && users.get(uid)?.name === a; };
 
 export async function renameUser(uid, rawName, password) {
   needReady();
@@ -301,4 +305,4 @@ export async function setFavs(uid, favs, base) {
 
 // 测试用
 export const _user = id => users.get(id);
-export function _reset() { users.clear(); byName.clear(); datas.clear(); pending.clear(); renaming.clear(); Object.assign(acctState, { ready: false, reason: '未载入', users: 0 }); }
+export function _reset() { users.clear(); byName.clear(); datas.clear(); pending.clear(); renaming.clear(); adminUid = null; Object.assign(acctState, { ready: false, reason: '未载入', users: 0 }); }

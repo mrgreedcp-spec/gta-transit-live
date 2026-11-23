@@ -195,7 +195,7 @@ async function handleApi(url, res, req) {
       }
       if (p === '/api/admin/reset' && req.method === 'POST') {
         if (limited('write') || limited('login')) return;
-        const b = await readJson(req, 2048);
+        const b = (await readJson(req, 2048)) || {};
         const r = await adminResetPassword(req.user.id, String(b.id || ''));
         return send(res, 200, { ok: true, ...r });
       }
@@ -225,7 +225,7 @@ async function handleApi(url, res, req) {
       }
       if (p === '/api/account/name' && m === 'POST') {
         if (limited('login')) return;
-        const b = await readJson(req, 2048);
+        const b = (await readJson(req, 2048)) || {};
         return send(res, 200, { user: await renameUser(req.user.id, b.name, b.password) });   // cookie 里是 uid，不用换
       }
     } catch (e) { return send(res, e.code || 500, e.body || { error: e.message }); }

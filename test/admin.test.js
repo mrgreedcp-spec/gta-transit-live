@@ -2,7 +2,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-const store = new Map(); let kvCalls = 0, failUserWrite = false;
+const store = new Map(); let kvCalls = 0, failUserWrite = false, slowUser = false;
 const sent = [];
 mock.module('web-push', { namedExports: {
   setVapidDetails() {}, generateVAPIDKeys: () => ({}),
@@ -11,7 +11,12 @@ mock.module('web-push', { namedExports: {
 mock.module(new URL('../server/kv.js', import.meta.url).href, { namedExports: {
   kvPersistent: true,
   kvGet: async k => { kvCalls++; return store.has(k) ? structuredClone(store.get(k)) : null; },
-  kvSet: async (k, v) => { kvCalls++; if (failUserWrite && k.startsWith('acct:user:')) throw new Error('boom'); store.set(k, structuredClone(v)); },
+  kvSet: async (k, v) => {
+    kvCalls++; if (failUserWrite && k.startsWith('acct:user:')) throw new Error('boom');
+    v = structuredClone(v);
+    if (slowUser && k.startsWith('acct:user:')) await new Promise(r => setTimeout(r, 400));
+    store.set(k, v);
+  },
   kvDel: async k => { kvCalls++; store.delete(k); },
 } });
 process.env.ACCOUNTS = '1';
@@ -48,12 +53,25 @@ test('管理员判定：只认 ADMIN_USER；没设时不存在', async () => {
   boss = (await mk('boss')).user.id;
   const ra = await mk('alice'); alice = ra.user.id; aliceCookie = ra.cookie;
   bob = (await mk('bob')).user.id;
+  assert.equal(A.isAdmin(boss), false);   // 启动后才注册的：不算管理员
+  A._reset(); await A.initAccounts();
   assert.equal(A.isAdmin(boss), true);
   assert.equal(A.isAdmin(alice), false);
   delete process.env.ADMIN_USER;
   assert.equal(A.isAdmin(boss), false);
   assert.throws(() => A.adminList(boss), e => e.code === 404);
   process.env.ADMIN_USER = 'boss';
+});
+
+test('回归：ADMIN_USER 启动时还没注册，之后抢注这个名字也拿不到管理权限', async () => {
+  process.env.ADMIN_USER = 'late_boss';
+  A._reset(); await A.initAccounts();
+  const late = (await mk('late_boss')).user.id;
+  assert.equal(A.isAdmin(late), false);
+  assert.throws(() => A.adminList(late), e => e.code === 404);
+  process.env.ADMIN_USER = 'boss';
+  A._reset(); await A.initAccounts();
+  assert.equal(A.isAdmin(boss), true);
 });
 
 test('非管理员：列表和重置都 404', async () => {
@@ -64,7 +82,7 @@ test('非管理员：列表和重置都 404', async () => {
 test('列表：人数、上限、会话数；不含密码哈希和 sid', async () => {
   await A.login('alice', PW);
   const l = A.adminList(boss);
-  assert.equal(l.count, 3); assert.equal(l.max, A.MAX_USERS);
+  assert.equal(l.count, 4); assert.equal(l.max, A.MAX_USERS);
   assert.equal(l.users.find(u => u.id === alice).sessions, 2);
   assert.equal(l.users.find(u => u.id === boss).self, true);
   assert.doesNotMatch(JSON.stringify(l), /hash|salt|sid/);
@@ -108,6 +126,8 @@ test('临时密码登录后只能改密码或登出；重启后仍拦截', async
 
 test('强制改密：不能沿用临时密码；改好后清掉 mustChange，临时密码失效', async () => {
   await assert.rejects(A.changePassword(alice, globalThis.temp, globalThis.temp, 'invite-code-1'), /weak_password/);
+  const wide = globalThis.temp.replace(/[a-z0-9]/g, c => String.fromCharCode(c.charCodeAt(0) + 0xFEE0));   // 全角写法，NFKC 后同一个密码
+  await assert.rejects(A.changePassword(alice, globalThis.temp, wide, 'invite-code-1'), /weak_password/);
   const s = await A.changePassword(alice, globalThis.temp, 'brandnewpass1', 'invite-code-1');
   assert.equal(A._user(alice).mustChange, undefined);
   assert.equal(store.get('acct:user:' + alice).mustChange, undefined);
@@ -149,6 +169,27 @@ test('并发：两人抢同一个名字、改名和注册抢同一个名字，�
   assert.notEqual(A._user(loser).name, 'hot_name');
   const rs2 = await Promise.allSettled([A.renameUser(loser, 'race_x', winner === alice ? PW : 'brandnewpass1'), mk('race_x')]);
   assert.equal(rs2.filter(r => r.status === 'fulfilled').length, 1);
+});
+
+test('回归：改名已占位时，注册同名被拒', async () => {
+  slowUser = true;
+  const p = A.renameUser(bob, 'slot_name', PW);
+  await new Promise(r => setTimeout(r, 250));   // 改名已验完密码、正在写存储
+  await assert.rejects(mk('slot_name'), /name_taken/);
+  await p; slowUser = false;
+  assert.equal(A.uidByName('slot_name'), bob);
+});
+
+test('回归：改名和改密码同时发生，密码不会等于最新用户名', async () => {
+  const cur = A._user(bob).name;
+  slowUser = true;
+  const r1 = A.renameUser(bob, 'abc_12345', PW);
+  const r2 = A.changePassword(bob, PW, 'abc_12345', 'invite-code-1');
+  const rs = await Promise.allSettled([r1, r2]); slowUser = false;
+  const u = A._user(bob);
+  assert.ok(!(rs[0].status === 'fulfilled' && rs[1].status === 'fulfilled'), JSON.stringify(rs.map(r => r.status)));
+  if (u.name === 'abc_12345') assert.equal(await A.login('abc_12345', 'abc_12345'), null);
+  assert.ok(cur);
 });
 
 test('改名写存储失败：内存不变，名字占位已释放', async () => {

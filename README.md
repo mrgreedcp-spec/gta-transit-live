@@ -163,7 +163,7 @@ Data used in this product or service is provided with the permission of Metrolin
 ## 账号模式（可选）
 
 - 在 Render 设 `SESSION_SECRET`（`openssl rand -base64 48`）和 `ACCOUNTS=1`，访问密码 `APP_PASSWORD` 变成注册邀请码。
-- `ADMIN_USER=<用户名>`：这个账号在「状态」页能看到账号列表、给别人重置密码（生成一次性临时密码，对方登录后必须改密码）。先注册该账号再设变量。
+- `ADMIN_USER=<用户名>`：这个账号在「状态」页能看到账号列表、给别人重置密码（生成一次性临时密码，对方登录后必须改密码）。先注册该账号再设变量；只认服务启动时已存在的账号（之后才注册这个名字的人拿不到管理权限，要重启才生效）。
 - `NOTIFY_USER=<用户名>`：外部提醒（`/api/notify`）只发给这个账号。
 - `ADMIN_USER`、`NOTIFY_USER` 对应的账号不能改用户名，别人也不能改成这两个名字。
 - 回滚：删掉 `ACCOUNTS` 就回到共享访问密码模式。
