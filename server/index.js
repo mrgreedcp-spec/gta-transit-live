@@ -194,7 +194,7 @@ async function handleApi(url, res, req) {
         const list = adminList(req.user.id), counts = deviceCountByUser();
         return send(res, 200, { ...list, users: list.users.map(u => ({ ...u, devices: counts[u.id] || 0 })) });
       }
-      if (p === '/api/admin/growth' && req.method === 'GET') return send(res, 200, growthStats(req.user.id, deviceCountByUser()));
+      if (p === '/api/admin/growth' && req.method === 'GET') return send(res, 200, growthStats(req.user.id));
       if (p === '/api/admin/reset' && req.method === 'POST') {
         if (limited('write') || limited('login')) return;
         const b = (await readJson(req, 2048)) || {};

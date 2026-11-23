@@ -27,18 +27,21 @@ async function redis(cmd) {
 }
 
 // ---------- 文件后端 ----------
-let mem = null, saveTimer = null;
+let mem = null, saveTimer = null, writing = Promise.resolve();
 async function loadFile() {
   if (mem) return mem;
   try { mem = JSON.parse(await readFile(FILE, 'utf8')); } catch { mem = {}; }
   return mem;
 }
+async function writeNow() {
+  await mkdir(path.dirname(FILE), { recursive: true });
+  await writeFile(FILE, JSON.stringify(mem));
+}
+// 写盘排队执行：同一时间只有一次 writeFile，不会交错写坏文件
+const queueWrite = () => { writing = writing.then(writeNow).catch(e => console.warn('[kv] 写入本地文件失败', e.message)); return writing; };
 function saveFile() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    await mkdir(path.dirname(FILE), { recursive: true });
-    await writeFile(FILE, JSON.stringify(mem));
-  }, 500);
+  saveTimer = setTimeout(() => { saveTimer = null; queueWrite(); }, 500);
 }
 
 const PREFIX = 'gta:';
@@ -56,9 +59,8 @@ export async function kvDel(key) {
 }
 // 退出前把文件后端还没落盘的写入立刻写掉（Upstash 每次写都已完成，无需处理）
 export async function kvFlush() {
-  if (kvKind === 'upstash' || !saveTimer || !mem) return;
-  clearTimeout(saveTimer); saveTimer = null;
-  await mkdir(path.dirname(FILE), { recursive: true });
-  await writeFile(FILE, JSON.stringify(mem));
+  if (kvKind === 'upstash' || !mem) return;
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; queueWrite(); }
+  await writing;
 }
 export function kvStatus() { return { kind: kvKind, persistent: kvPersistent, cmdsToday: stats.cmds, errors: stats.errors, lastError: stats.lastError }; }

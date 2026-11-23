@@ -77,7 +77,7 @@ function render(g) {
     [`${g.accounts.total} / ${g.accounts.max}`, '账号总数 / 上限'], [g.accounts.new7, '近 7 天新注册'], [g.accounts.new30, '近 30 天新注册'],
     [g.active.today, '今天活跃'], [g.active.d7, '近 7 天活跃'], [g.active.d30, '近 30 天活跃'],
     [`${g.activation.activated}（${pct(g.activation.activated, g.accounts.total)}）`, '已激活账号'],
-    [g.activation.withFavs, '有收藏'], [g.activation.withPush, '开了到站提醒'],
+    [g.activation.withFavs, '有收藏'], [g.activation.withRules, '建了到站提醒'],
   ];
   for (const [v, l] of k) { const c = el('div', null, $('#kpis'), 'kpi'); el('div', String(v), c, 'v'); el('div', l, c, 'l'); }
   $('#signSub').textContent = `近 30 天共 ${g.accounts.new30} 个，累计 ${g.signups.at(-1)?.total ?? 0} 个`;

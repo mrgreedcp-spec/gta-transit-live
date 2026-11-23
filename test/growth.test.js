@@ -124,34 +124,35 @@ test('统计口径：新增、累计、活跃边界、渠道与激活', () => {
   const now = Date.parse('2026-11-23T17:00:00Z');   // 多伦多 11-23 中午
   const day = (s) => Date.parse(`${s}T17:00:00Z`);
   const users = [
-    { id: 'u1', created: day('2026-09-01'), ref: null, favs: 0 },          // 30 天以前
-    { id: 'u2', created: day('2026-11-17'), ref: 'xhs', favs: 2 },         // 今天 -6：算近 7 天
-    { id: 'u3', created: day('2026-11-16'), ref: 'xhs', favs: 0 },         // 今天 -7：不算近 7 天
-    { id: 'u4', created: Date.parse('2026-11-23T04:30:00Z'), ref: 'wechat', favs: 0 },   // UTC 11-23，多伦多 11-22
+    { id: 'u1', created: day('2026-09-01'), ref: null, favs: 0, rules: 0 },          // 30 天以前
+    { id: 'u2', created: day('2026-11-17'), ref: 'xhs', favs: 2, rules: 0 },         // 今天 -6：算近 7 天
+    { id: 'u3', created: day('2026-11-16'), ref: 'xhs', favs: 0, rules: 1 },         // 今天 -7：不算近 7 天；建了提醒 = 激活
+    { id: 'u4', created: Date.parse('2026-11-23T04:30:00Z'), ref: 'wechat', favs: 0, rules: 0 },   // UTC 11-23，多伦多 11-22
   ];
   const seen = new Map([['u1', '2026-11-23'], ['u2', '2026-11-17'], ['u3', '2026-11-16'], ['gone', '2026-11-23']]);
-  const g = G.buildGrowth({ users, seen, dau: { '2026-11-20': 3 }, todaySet: new Set(['u1']), pushUids: { u3: 1 }, max: 50, now });
+  const g = G.buildGrowth({ users, seen, dau: { '2026-11-20': 3 }, todaySet: new Set(['u1', 'gone']), max: 50, now });
   assert.equal(g.today, '2026-11-23');
   assert.deepEqual(g.accounts, { total: 4, max: 50, new7: 2, new30: 3 });
   assert.equal(g.signups.length, 30); assert.equal(g.signups.at(-1).total, 4); assert.equal(g.signups[0].total, 1);
   assert.equal(g.signups.find(s => s.date === '2026-11-22').n, 1);
   assert.deepEqual(g.active, { today: 1, d7: 2, d30: 3 });   // 已删除的账号 gone 不算；u3 在 7 天外
   assert.equal(g.dau.find(d => d.date === '2026-11-20').n, 3);
-  assert.equal(g.dau.at(-1).n, 1); assert.equal(g.since, '2026-11-20');
+  assert.equal(g.since, '2026-11-20');
   assert.equal(g.dau.find(d => d.date === '2026-11-19').n, null);   // 开始统计之前：没有数据
   assert.equal(g.dau.find(d => d.date === '2026-11-21').n, 0);
   assert.deepEqual(g.channels, [{ ref: 'xhs', signups: 2, activated: 2 }, { ref: 'wechat', signups: 1, activated: 0 }, { ref: null, signups: 1, activated: 0 }]);
-  assert.deepEqual(g.activation, { withFavs: 1, withPush: 1, activated: 2 });
+  assert.deepEqual(g.activation, { withFavs: 1, withRules: 1, activated: 2 });
+  assert.equal(g.dau.at(-1).n, g.active.today);   // 今天的活跃：KPI 和曲线口径一致（不算不存在的账号）
 });
 
 test('批量写入：有变化才写；跨午夜把前一天定格', async () => {
-  const D = Date.parse('2026-11-24T04:50:00Z');   // 多伦多 11-23 23:50
+  const D = Date.parse('2027-03-10T04:50:00Z');   // 多伦多 2027-03-09 23:50（离运行日期远，不和别的测试的真实时间混在一起）
   G.touch('pa', D); G.touch('pb', D);
   G.touch('pa', D + 15 * 60e3);                   // 11-24 00:05
   await G.flushSeen(D + 16 * 60e3);
   const dau = store.get('acct:dau'), seen = store.get('acct:seen');
-  assert.ok(dau['2026-11-23'] >= 2); assert.equal(dau['2026-11-24'], 1);
-  assert.equal(seen.pa, '2026-11-24'); assert.equal(seen.pb, '2026-11-23');
+  assert.equal(dau['2027-03-09'], 2); assert.equal(dau['2027-03-10'], 1);
+  assert.equal(seen.pa, '2027-03-10'); assert.equal(seen.pb, '2027-03-09');
   const n = kvCalls;
   await G.flushSeen(D + 17 * 60e3);
   assert.equal(kvCalls, n);   // 没变化：不写
@@ -180,9 +181,31 @@ test('DAU 只留 90 天；载入失败不写、恢复后合并；写失败下次
   assert.ok(Object.keys(dau).length <= 90);
 });
 
+test('回归：部署时新旧实例并存，写入前合并对方的活跃，不互相覆盖', async () => {
+  G._resetGrowth(); store.delete('acct:seen'); store.delete('acct:dau');
+  const now = Date.parse('2027-05-05T16:00:00Z'), today = '2027-05-05';
+  await G.startGrowth({ timer: false, now });          // 新实例启动：存储里还没有数据
+  store.set('acct:seen', { o1: today, o2: today, old: '2027-05-01' });   // 旧实例退出前写入
+  store.set('acct:dau', { [today]: 2, '2027-05-01': 4 });
+  G.touch('m1', now);                                   // 新实例自己见到的
+  await G.flushSeen(now);
+  const seen = store.get('acct:seen'), dau = store.get('acct:dau');
+  assert.deepEqual(Object.keys(seen).sort(), ['m1', 'o1', 'o2', 'old']);
+  assert.equal(dau[today], 3); assert.equal(dau['2027-05-01'], 4);
+});
+
+test('定时写入和退出写入撞在一起：都等同一次写完', async () => {
+  const now = Date.parse('2027-05-05T17:00:00Z');
+  G.touch('m2', now);
+  const a = G.flushSeen(now), b = G.flushSeen(now);
+  assert.equal(a, b);
+  await b;
+  assert.equal(store.get('acct:seen').m2, '2027-05-05');
+});
+
 test('重启后今天的活跃不归零', async () => {
-  const now = Date.parse('2026-11-24T18:00:00Z');
+  const now = Date.parse('2027-05-05T18:00:00Z');   // 上一个测试已把 m2 今天的活跃写进存储
   G._resetGrowth();
   await G.startGrowth({ timer: false, now });
-  assert.equal(G.buildGrowth({ users: [{ id: 'nu', created: now, favs: 0 }], seen: G._growthState().seen, dau: G._growthState().dau, todaySet: G._growthState().day.uids, max: 50, now }).active.today, 1);
+  assert.equal(G.buildGrowth({ users: [{ id: 'm2', created: now, favs: 0, rules: 0 }], seen: G._growthState().seen, dau: G._growthState().dau, todaySet: G._growthState().day.uids, max: 50, now }).active.today, 1);
 });

@@ -262,7 +262,7 @@ export function sessionAlive(uid, sid) {
   return !!users.get(uid)?.sessions.some(x => x.sid === sid && x.exp > now);
 }
 // 增长仪表盘用：只给统计需要的字段（不含用户名、密码、会话）
-export const growthUsers = () => [...users.values()].map(u => ({ id: u.id, created: u.created, ref: u.ref || null, favs: datas.get(u.id)?.favs?.length || 0 }));
+export const growthUsers = () => [...users.values()].map(u => ({ id: u.id, created: u.created, ref: u.ref || null, favs: datas.get(u.id)?.favs?.length || 0, rules: datas.get(u.id)?.rules?.length || 0 }));
 export const userCount = () => users.size;
 export const userIds = () => [...users.keys()];
 export const userById = id => { const u = users.get(id); return u ? { id: u.id, name: u.name } : null; };

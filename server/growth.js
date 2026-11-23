@@ -23,7 +23,7 @@ export function lastDays(today, n) {
 }
 
 const DAU_KEEP = 90;
-let on = false, loaded = false, dirty = false, flushing = false, timer = null;
+let on = false, loaded = false, dirty = false, timer = null;
 let seen = new Map();             // uid -> 最后活跃日
 let dau = {};                     // date -> 当天活跃账号数
 let day = { date: null, uids: new Set() };   // 今天活跃的 uid（跨午夜时定格进 dau）
@@ -58,24 +58,32 @@ export async function loadGrowth(now = Date.now()) {
   } catch (e) { console.warn('[growth] 载入活跃数据失败，稍后重试：', e.message); }
 }
 
-export async function flushSeen(now = Date.now()) {
-  if (!on || flushing) return;
-  flushing = true;
+// 正在写的那一次：并发调用（定时器和退出信号撞在一起）都等同一个，不会提前退出把它截断
+let inflight = null;
+export function flushSeen(now = Date.now()) {
+  if (!on) return Promise.resolve();
+  if (!inflight) inflight = doFlush(now).finally(() => { inflight = null; });
+  return inflight;
+}
+async function doFlush(now) {
+  if (!loaded) await loadGrowth(now);
+  if (!loaded) return;   // 没载入成功：绝不写，免得覆盖存储里的历史
+  const today = torontoDate(now);
+  roll(today);
+  const keep = new Set(lastDays(today, DAU_KEEP));
+  for (const k of Object.keys(dau)) if (!keep.has(k)) { delete dau[k]; dirty = true; }
+  if (!dirty) return;
+  dirty = false;
   try {
-    if (!loaded) await loadGrowth(now);
-    if (!loaded) return;   // 没载入成功：绝不写，免得覆盖存储里的历史
-    const today = torontoDate(now);
-    roll(today);
+    // 写之前重读并合并：部署时新旧实例会短暂并存，各自只见过一部分活跃；直接覆盖会丢掉对方写进去的
+    const s = (await kvGet('acct:seen')) || {}, d = (await kvGet('acct:dau')) || {};
+    for (const [uid, date] of Object.entries(s)) if (!seen.has(uid) || seen.get(uid) < date) seen.set(uid, date);
+    for (const [date, n] of Object.entries(d)) if (keep.has(date)) dau[date] = Math.max(dau[date] || 0, +n || 0);
+    for (const [uid, date] of seen) if (date === today) day.uids.add(uid);   // 今天的活跃 = 合并后最后活跃日是今天的账号
     dau[today] = Math.max(dau[today] || 0, day.uids.size);
-    const keep = new Set(lastDays(today, DAU_KEEP));
-    for (const k of Object.keys(dau)) if (!keep.has(k)) { delete dau[k]; dirty = true; }
-    if (!dirty) return;
-    dirty = false;
-    try {
-      await kvSet('acct:seen', Object.fromEntries(seen));
-      await kvSet('acct:dau', { ...dau });
-    } catch (e) { dirty = true; console.warn('[growth] 写入活跃数据失败，下次重试：', e.message); }
-  } finally { flushing = false; }
+    await kvSet('acct:seen', Object.fromEntries(seen));
+    await kvSet('acct:dau', { ...dau });
+  } catch (e) { dirty = true; console.warn('[growth] 写入活跃数据失败，下次重试：', e.message); }
 }
 
 export async function startGrowth({ timer: useTimer = true, now = Date.now() } = {}) {
@@ -88,13 +96,14 @@ export async function startGrowth({ timer: useTimer = true, now = Date.now() } =
       const bye = () => process.exit(0);
       setTimeout(bye, 5000).unref();
       console.log(`[growth] 收到 ${sig}，写入活跃数据后退出`);
-      flushSeen().catch(() => {}).then(() => kv.kvFlush?.()).catch(() => {}).finally(bye);
+      // 先等正在写的那次，再写一次收尾（期间新增的活跃）
+      flushSeen().catch(() => {}).then(() => flushSeen()).catch(() => {}).then(() => kv.kvFlush?.()).catch(() => {}).finally(bye);
     });
   }
 }
 
 // 纯函数：把内存数据算成接口返回的 JSON
-export function buildGrowth({ users, seen: seenMap, dau: dauMap, todaySet, pushUids = {}, max, now = Date.now() }) {
+export function buildGrowth({ users, seen: seenMap, dau: dauMap, todaySet, max, now = Date.now() }) {
   const today = torontoDate(now);
   const d30 = lastDays(today, 30), d7 = new Set(lastDays(today, 7)), d30s = new Set(d30);
   const created = users.map(u => ({ ...u, date: torontoDate(u.created) }));
@@ -102,7 +111,7 @@ export function buildGrowth({ users, seen: seenMap, dau: dauMap, todaySet, pushU
   for (const u of created) byDate[u.date] = (byDate[u.date] || 0) + 1;
   let total = created.filter(u => u.date < d30[0]).length;
   const signups = d30.map(date => { total += byDate[date] || 0; return { date, n: byDate[date] || 0, total }; });
-  const activated = u => u.favs > 0 || (pushUids[u.id] || 0) > 0;
+  const activated = u => u.favs > 0 || u.rules > 0;   // 激活 = 收藏了站点或建了到站提醒（看账号数据，不看设备）
   const ch = new Map();
   for (const u of created) {
     const k = u.ref || null, c = ch.get(k) || { ref: k, signups: 0, activated: 0 };
@@ -111,23 +120,24 @@ export function buildGrowth({ users, seen: seenMap, dau: dauMap, todaySet, pushU
   }
   const ids = new Set(users.map(u => u.id));
   const lastSeen = [...seenMap].filter(([uid]) => ids.has(uid)).map(([, date]) => date);
+  const todayActive = [...todaySet].filter(uid => ids.has(uid)).length;
   const dates = Object.keys(dauMap).sort();
   const first = dates[0] && dates[0] < today ? dates[0] : today;   // 开始统计之前的日子是「没有数据」，不是 0
   return {
     today, tz: 'America/Toronto', since: dates[0] || null,
     accounts: { total: users.length, max, new7: created.filter(u => d7.has(u.date)).length, new30: created.filter(u => d30s.has(u.date)).length },
     signups,
-    active: { today: [...todaySet].filter(uid => ids.has(uid)).length, d7: lastSeen.filter(d => d7.has(d)).length, d30: lastSeen.filter(d => d30s.has(d)).length },
-    dau: d30.map(date => ({ date, n: date < first ? null : date === today ? Math.max(dauMap[date] || 0, todaySet.size) : dauMap[date] || 0 })),
+    active: { today: todayActive, d7: lastSeen.filter(d => d7.has(d)).length, d30: lastSeen.filter(d => d30s.has(d)).length },
+    dau: d30.map(date => ({ date, n: date < first ? null : date === today ? todayActive : dauMap[date] || 0 })),
     channels: [...ch.values()].sort((a, b) => b.signups - a.signups || (a.ref === null) - (b.ref === null) || String(a.ref).localeCompare(String(b.ref))),   // 同数时「未知」排最后
-    activation: { withFavs: users.filter(u => u.favs > 0).length, withPush: users.filter(u => (pushUids[u.id] || 0) > 0).length, activated: users.filter(activated).length },
+    activation: { withFavs: users.filter(u => u.favs > 0).length, withRules: users.filter(u => u.rules > 0).length, activated: users.filter(activated).length },
   };
 }
 
-export function growthStats(actorUid, pushUids = {}, now = Date.now()) {
+export function growthStats(actorUid, now = Date.now()) {
   if (!isAdmin(actorUid)) throw Object.assign(new Error('not found'), { code: 404 });
   roll(torontoDate(now));
-  return buildGrowth({ users: growthUsers(), seen, dau, todaySet: day.uids, pushUids, max: MAX_USERS, now });
+  return buildGrowth({ users: growthUsers(), seen, dau, todaySet: day.uids, max: MAX_USERS, now });
 }
 
 // /admin 页面文件（放在仓库 admin/ 目录，不在 public/ 里，路径技巧够不到）：只给管理员，精确匹配
@@ -136,7 +146,7 @@ export const adminAsset = (pathname, uid) => (Object.hasOwn(ASSETS, pathname) &&
 
 // 测试用
 export function _resetGrowth() {
-  on = false; loaded = false; dirty = false; flushing = false;
+  on = false; loaded = false; dirty = false; inflight = null;
   if (timer) clearInterval(timer); timer = null;
   seen = new Map(); dau = {}; day = { date: null, uids: new Set() };
 }
