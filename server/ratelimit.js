@@ -5,6 +5,7 @@ const RULES = {
   plan: { cap: 5, rate: 1 / 20 },  // 路线规划
   geo: { cap: 20, rate: 0.5 },     // 地名搜索
   write: { cap: 10, rate: 0.2 },   // 写操作（推送规则、订阅）
+  login: { cap: 5, rate: 1 / 120 }, // 改密码（每 2 分钟回 1 次）
 };
 
 export function clientKey(req) {

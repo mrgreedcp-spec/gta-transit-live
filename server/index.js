@@ -9,6 +9,8 @@ import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
 import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule, digestStats } from './push.js';
 import { kvStatus } from './kv.js';
+import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCookie, clearCookies } from './auth-accounts.js';
+import { logout, changePassword, getFavs, setFavs } from './accounts.js';
 
 async function readJson(req, limit = 16384) {
   let data = '';
@@ -182,6 +184,25 @@ async function handleApi(url, res, req) {
   const who = clientKey(req);
   const limited = kind => { const wait = take(kind, who); if (!wait) return false; res.setHeader('retry-after', String(wait)); send(res, 429, { error: 'rate_limited', retryAfter: wait }); return true; };
   if (limited('api')) return;
+  if (p.startsWith('/api/account/') || p === '/api/favs') {
+    if (!req.user) return send(res, 404, { error: 'not found' });   // 旧模式（共享密码）没有账号接口；前端据此判断
+    const m = req.method;
+    try {
+      if (p === '/api/account/me' && m === 'GET') return send(res, 200, { user: { id: req.user.id, name: req.user.name } });
+      if (p === '/api/favs' && m === 'GET') return send(res, 200, getFavs(req.user.id));
+      if (m !== 'GET' && limited('write')) return;
+      if (p === '/api/favs' && m === 'PUT') { const b = await readJson(req, 32768); return send(res, 200, await setFavs(req.user.id, b.favs, b.base)); }
+      if (p === '/api/account/logout' && m === 'POST') { await logout(req.user.id, req.user.sid); res.setHeader('set-cookie', clearCookies); return send(res, 200, { ok: true }); }
+      if (p === '/api/account/password' && m === 'POST') {
+        if (limited('login')) return;
+        const b = await readJson(req, 2048);
+        const s = await changePassword(req.user.id, b.old, b.new, process.env.APP_PASSWORD || '');
+        res.setHeader('set-cookie', sessionCookie(req, s.cookie, s.maxAge));
+        return send(res, 200, { ok: true });
+      }
+    } catch (e) { return send(res, e.code || 500, e.body || { error: e.message }); }
+    return send(res, 404, { error: 'not found' });
+  }
   if (p === '/api/status') return send(res, 200, { ...(await apiStatus()), planner: plannerUsage(), push: { ...pushState }, kv: kvStatus() });
   if (p.startsWith('/api/push/')) {
     const m = req.method;
@@ -324,9 +345,12 @@ http.createServer(async (req, res) => {
   }
   console.log(`网络代理：${process.env.HTTPS_PROXY || process.env.https_proxy || '无（直连）'}`);
   console.log(`访问密码：${authEnabled ? '已启用' : '未启用'}`);
+  if (accountsWanted) console.log(accountsOn ? '账号模式：已启用（APP_PASSWORD 作邀请码）' : `账号模式：未启用，退回共享密码。原因：${accountsWhyOff}`);
   console.log(`存储：${kvStatus().kind}${kvStatus().persistent ? '' : '（非持久）'}`);
   console.log(`GO API key：${goKey() ? '已配置' : '未配置（GO 只显示静态站点）'}`);
 });
+
+startAccounts();
 
 // 推送提醒：用和到站接口相同的逻辑取到站
 initPush(async (agency, stopId) => (await apiArrivals(agency, stopId, { limit: 15, maxWaitMs: 8000 }))[1].arrivals || [])

@@ -687,6 +687,34 @@ function stateText(v) {
 }
 const linkify = s => esc(s).replace(/(https?:\/\/\S+)/g, '<a href="$1" target="_blank" rel="noopener">申请页面</a>');
 
+// ---------- 账号（服务端开了 ACCOUNTS 才有；旧模式 /api/account/me 返回 404） ----------
+window.account = null;
+async function initAccount() {
+  const r = await fetch('/api/account/me', { headers: { accept: 'application/json' } });
+  if (r.status === 401) { location.href = '/login'; return; }
+  if (!r.ok) return;
+  window.account = (await r.json()).user;
+  document.body.classList.add('acct-mode');
+  $('#acctName').textContent = account.name;
+  $('#acctBox').hidden = false;
+  $('#logout').hidden = true;
+  window.dispatchEvent(new Event('account-ready'));
+}
+$('#acctLogout').onclick = async () => {
+  try { await fetch('/api/account/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dev: localStorage.getItem('pushDev') }) }); } catch {}
+  for (const k of ['favStops', 'favsUid', 'favsRev', 'favsDirty', 'pushDev']) localStorage.removeItem(k);
+  location.href = '/login';
+};
+$('#pwForm').onsubmit = async e => {
+  e.preventDefault();
+  const msg = $('#pwMsg'); msg.textContent = '保存中…';
+  const r = await fetch('/api/account/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ old: $('#pwOld').value, new: $('#pwNew').value }) }).catch(() => null);
+  const err = { bad_password: '原密码不对。', weak_password: '新密码至少 8 位，且不能和用户名或邀请码相同。', rate_limited: '太频繁了，过几分钟再试。' };
+  if (r?.ok) { msg.textContent = '已改好。其他设备需要重新登录。'; $('#pwForm').reset(); return; }
+  const j = await r?.json().catch(() => ({})) || {};
+  msg.textContent = err[j.error] || '没保存成功，请稍后再试。';
+};
+
 async function loadStatus() {
   const r = await api('/api/status');
   agencies = r.agencies;
@@ -769,6 +797,7 @@ async function tick() {
   renderFavs();
   fetch('/api/status', { method: 'HEAD' }).then(() => {}).catch(() => {});
   $('#logout').hidden = false;
+  initAccount().catch(() => {});
   tick();
   loadStops().catch(() => {});
   // 从通知点进来：/?tab=favs（每日收藏摘要）或 /?stop=agency:id

@@ -68,6 +68,12 @@ h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
 .guide h4 { margin: 12px 0 4px; font-size: 14px; }
 .guide ol, .guide ul { margin: 0; padding-left: 20px; }
 .guide li { margin: 3px 0; }
+.acct { margin: 10px 0; padding: 10px 12px; border: 1px solid #cfe0f3; background: #f4f8fd; border-radius: 10px; font-size: 14px; }
+.acct-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.acct button#acctLogout { border: 1px solid #ccc; background: #fff; border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+.acct details { margin: 8px 0 4px; } .acct summary { color: #0a66c2; cursor: pointer; }
+.pw-form { display: grid; gap: 6px; margin-top: 6px; } .pw-form input { font-size: 16px; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; }
+.only-acct { display: none; } body.acct-mode .only-acct { display: inline; } body.acct-mode .only-legacy { display: none; }
 .guide.done summary::after { content: "  ✓ 已装好"; color: #2e9e44; font-weight: 400; }
 .sec-head { display: flex; justify-content: space-between; align-items: center; }
 

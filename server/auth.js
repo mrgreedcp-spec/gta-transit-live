@@ -1,6 +1,7 @@
 // 简单访问密码：设置环境变量 APP_PASSWORD 才启用；本地不设则全部放行。
 // 登录后发 HttpOnly cookie：<过期时间>.<HMAC>，改密码即全部失效。
 import crypto from 'node:crypto';
+import { accountsOn, handleAccountAuth } from './auth-accounts.js';
 
 const PASSWORD = process.env.APP_PASSWORD || '';
 const COOKIE = 'gta_auth';
@@ -57,6 +58,7 @@ async function readBody(req, limit = 4096) {
 
 // 返回 true = 已处理（响应已发出）；false = 继续正常路由
 export async function handleAuth(req, res, url) {
+  if (accountsOn) return handleAccountAuth(req, res, url);   // 账号模式（ACCOUNTS=1 且配置齐全），见 auth-accounts.js
   if (!PASSWORD) return false;
   const p = url.pathname;
 

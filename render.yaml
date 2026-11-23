@@ -20,6 +20,11 @@ services:
         value: --max-old-space-size=256
       - key: APP_PASSWORD
         sync: false
+      # 账号模式：两项都要在 Render 后台手动设置。SESSION_SECRET 用 `openssl rand -base64 48` 生成；ACCOUNTS 设为 1 开启
+      - key: SESSION_SECRET
+        sync: false
+      - key: ACCOUNTS
+        sync: false
       - key: GO_API_KEY
         sync: false
       - key: UPSTASH_REDIS_REST_URL
