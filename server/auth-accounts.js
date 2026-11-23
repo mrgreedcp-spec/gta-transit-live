@@ -104,9 +104,10 @@ export async function handleAccountAuth(req, res, url) {
   const p = url.pathname, ip = clientKey(req);
 
   if (p === '/logout') {   // 旧链接 / 书签：顺便注销服务器上的这个会话
-    // 只在本站内点击（或直接打开）时注销服务端会话；别的网站链过来的只清 cookie，不能远程把会话删掉
+    // 只认本站内点击或直接打开；别的网站链过来的什么都不清，回首页（防止被远程强制登出）
     const site = req.headers['sec-fetch-site'];
-    const u = !site || site === 'same-origin' || site === 'none' ? verifySession(cookieOf(req, COOKIE)) : null;
+    if (site && site !== 'same-origin' && site !== 'none') { html(res, 302, '', { location: '/' }); return true; }
+    const u = verifySession(cookieOf(req, COOKIE));
     if (u) await logout(u.id, u.sid).catch(() => {});
     html(res, 302, '', { location: '/login', 'set-cookie': clearCookies }); return true;
   }

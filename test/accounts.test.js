@@ -199,3 +199,13 @@ test('回归：改密码和用旧密码登录同时发生，改密码不会被�
     assert.ok(store.get('acct:user:' + uid).pw.hash === A._user(uid).pw.hash);
   }
 });
+
+test('回归：别的网站链到 /logout 不清 cookie、不注销会话', async () => {
+  const x = await call({ path: '/logout', headers: { cookie: `gta_sess=${alice}`, 'sec-fetch-site': 'cross-site' } });
+  assert.equal(x.res.code, 302); assert.equal(x.res.headers.location, '/');
+  assert.equal(x.res.headers['set-cookie'], undefined);
+  assert.equal((await asUser(alice)).handled, false);   // 会话仍有效
+  const own = await call({ path: '/logout', headers: { cookie: `gta_sess=${alice}`, 'sec-fetch-site': 'same-origin' } });
+  assert.equal(own.res.headers.location, '/login');
+  assert.notEqual((await asUser(alice)).handled, false);   // 本站点退出：会话注销
+});

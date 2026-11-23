@@ -541,7 +541,11 @@ let favs = ls.get('favStops', []);
 let favEditing = false;
 const nextTxt = new Map(); // key -> "19 3分 · 19 12分"
 const isFav = s => favs.some(f => favKey(f) === favKey(s));
-const saveFavs = () => { ls.set('favStops', favs); window.syncDigestStops?.(); if (window.account) pushFavsSoon(); };
+const saveFavs = () => {
+  ls.set('favStops', favs); window.syncDigestStops?.();
+  if (window.account) pushFavsSoon();
+  else if (ls.get('favsUid', null) !== null) { favsEdits++; ls.set('favsDirty', true); }   // 账号还没就绪（离线、冷启动）：先记待上传，就绪后 pullFavs 会传
+};
 
 // ---------- 收藏跟账号同步（账号模式） ----------
 // 本浏览器第一次登录账号（本地收藏还没归属任何账号）：服务器和本地取并集；本地收藏属于别的账号：直接用服务器的，不上传别人的收藏。

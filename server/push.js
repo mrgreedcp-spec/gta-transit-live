@@ -283,6 +283,11 @@ export async function acctSetDigest(uid, input) {
   });
   return next.digest;
 }
+// 改密码后当前设备换了新会话：把绑在旧会话上的设备改绑到新会话，免得这台设备从此收不到提醒
+export async function rebindSession(uid, oldSid, newSid) {
+  for (const [id, d] of devices) if (d.userId === uid && d.sid === oldSid) { d.sid = newSid; await saveDevice(id); }
+}
+
 export async function acctUnsubscribe(uid, id) {
   if (devices.get(id)?.userId !== uid) throw Object.assign(new Error('unknown_device'), { code: 404 });
   await unsubscribe(id);

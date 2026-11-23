@@ -129,6 +129,14 @@ test('关掉账号模式：认领过的设备按自己保存的快照推送', as
   P.usePushAccounts(true);
 });
 
+test('回归：在这台设备上改密码后，改绑到新会话，这台设备照常收提醒', async () => {
+  const s = await A.changePassword(alice, 'longpassword', 'newpassword9', 'inv');   // 其他会话全部失效，包括 sA1
+  sent.length = 0; await assert.rejects(P.acctSendTest(alice), /no_device/);
+  await P.rebindSession(alice, sA1, sidOf(s));
+  sent.length = 0; await P.acctSendTest(alice);
+  assert.deepEqual(sent.map(x => x.ep), [ep('old')]);
+});
+
 test('回归：账号还没载入时摘要时间表、NOTIFY_USER 外部提醒都回 503', async () => {
   A._reset();
   assert.throws(() => P.digestSchedule(), /accounts_loading/);

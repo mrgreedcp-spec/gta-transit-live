@@ -8,7 +8,7 @@ import { handleAuth, authEnabled } from './auth.js';
 import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
 import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule, digestStats,
-  usePushAccounts, acctRules, acctAddRule, acctDeleteRule, acctGetDigest, acctSetDigest, acctUnsubscribe, acctSendTest, acctSendDigestNow } from './push.js';
+  usePushAccounts, acctRules, acctAddRule, acctDeleteRule, acctGetDigest, acctSetDigest, acctUnsubscribe, acctSendTest, acctSendDigestNow, rebindSession } from './push.js';
 import { kvStatus } from './kv.js';
 import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCookie, clearCookies } from './auth-accounts.js';
 import { logout, changePassword, getFavs, setFavs } from './accounts.js';
@@ -202,6 +202,7 @@ async function handleApi(url, res, req) {
         const b = await readJson(req, 2048);
         const s = await changePassword(req.user.id, b.old, b.new, process.env.APP_PASSWORD || '');
         res.setHeader('set-cookie', sessionCookie(req, s.cookie, s.maxAge));
+        await rebindSession(req.user.id, req.user.sid, s.cookie.split('.')[2]).catch(() => {});   // cookie: v1.<uid>.<sid>.<exp>.<mac>
         return send(res, 200, { ok: true });
       }
     } catch (e) { return send(res, e.code || 500, e.body || { error: e.message }); }
