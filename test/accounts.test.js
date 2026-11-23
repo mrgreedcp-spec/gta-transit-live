@@ -161,3 +161,30 @@ test('重启后从存储恢复，会话仍有效', async () => {
   assert.equal((await asUser(alice)).handled, false);
   assert.equal(A.getFavs((await asUser(alice)).req.user.id).favs.length, 100);
 });
+
+test('回归：同一账号并发写数据不互相覆盖', async () => {
+  const uid = A.uidByName('alice');
+  const slow = ms => new Promise(r => setTimeout(r, ms));
+  await Promise.all([
+    A.updateData(uid, async d => { await slow(30); return { ...d, rules: [...(d.rules || []), { id: 'r1' }] }; }),
+    A.updateData(uid, async d => ({ ...d, rules: [...(d.rules || []), { id: 'r2' }] })),
+    A.setFavs(uid, [{ agency: 'miway', id: 'NEW', name: 'x' }], A.getFavs(uid).rev),
+  ]);
+  const d = A.getData(uid);
+  assert.deepEqual(d.rules.map(r => r.id), ['r1', 'r2']);
+  assert.deepEqual(d.favs.map(f => f.id), ['NEW']);
+  assert.deepEqual(store.get('acct:data:' + uid).rules.map(r => r.id), ['r1', 'r2']);
+});
+
+test('回归：改密码和用旧密码登录同时发生，改密码不会被撤销', async () => {
+  for (const order of [0, 1]) {
+    const name = ['carol', 'bob_2'][order];   // 人数已满，用前面注册过的账号（密码 longpassword）
+    const uid = A.uidByName(name);
+    const jobs = [A.login(name, 'longpassword'), A.changePassword(uid, 'longpassword', 'newpassword' + order, 'x')];
+    if (order) jobs.reverse();
+    await Promise.all(jobs);
+    assert.equal(await A.login(name, 'longpassword'), null, 'order ' + order);
+    assert.ok(await A.login(name, 'newpassword' + order));
+    assert.ok(store.get('acct:user:' + uid).pw.hash === A._user(uid).pw.hash);
+  }
+});

@@ -104,3 +104,10 @@ test('关掉账号模式：认领过的设备按自己保存的快照推送', as
   assert.deepEqual(P.getRules(devOld).map(x => x.stop.id), ['S1']);
   P.usePushAccounts(true);
 });
+
+test('回归：账号还没载入时摘要时间表回 503（别让 Mac 缓存空表）', async () => {
+  A._reset();
+  assert.throws(() => P.digestSchedule(), /accounts_loading/);
+  await A.initAccounts();
+  assert.deepEqual(P.digestSchedule(), [{ at: '09:30', days: [2] }]);
+});

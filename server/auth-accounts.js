@@ -5,7 +5,7 @@
 import crypto from 'node:crypto';
 import { kvPersistent } from './kv.js';
 import { clientKey } from './ratelimit.js';
-import { acctState, setSessionSecret, parseSession, verifySession, register, login, initAccounts } from './accounts.js';
+import { acctState, setSessionSecret, parseSession, verifySession, register, login, logout, initAccounts } from './accounts.js';
 
 const INVITE = process.env.APP_PASSWORD || '';
 const SECRET = process.env.SESSION_SECRET || '';
@@ -103,7 +103,11 @@ const REG_MSG = { bad_username: '用户名要 3–20 位小写字母、数字或
 export async function handleAccountAuth(req, res, url) {
   const p = url.pathname, ip = clientKey(req);
 
-  if (p === '/logout') { html(res, 302, '', { location: '/login', 'set-cookie': clearCookies }); return true; }
+  if (p === '/logout') {   // 旧链接 / 书签：顺便注销服务器上的这个会话
+    const u = verifySession(cookieOf(req, COOKIE));
+    if (u) await logout(u.id, u.sid).catch(() => {});
+    html(res, 302, '', { location: '/login', 'set-cookie': clearCookies }); return true;
+  }
 
   if ((p === '/login' || p === '/register') && req.method === 'POST') {
     if (badOrigin(req)) { html(res, 403, accountPage({ msg: '请求来源不对。' })); return true; }

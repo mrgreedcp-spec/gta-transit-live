@@ -102,13 +102,28 @@ export async function initAccounts(attempt = 0) {
 }
 const needReady = () => { if (!acctState.ready) throw err('auth_unavailable', 503); };
 
+// 同一个用户的写操作排队执行，每次都基于最新记录改（避免「读→await→写回旧副本」覆盖别人的改动）
+const locks = new Map();
+function withLock(key, fn) {
+  const run = (locks.get(key) || Promise.resolve()).then(fn, fn);
+  const tail = run.catch(() => {});
+  locks.set(key, tail);
+  tail.then(() => { if (locks.get(key) === tail) locks.delete(key); });
+  return run;
+}
+
 // ---------- 会话增删 ----------
 async function saveUser(u) { await kvSet('acct:user:' + u.id, u); users.set(u.id, u); }
-async function newSession(u, keepOthers = true) {
-  const now = Math.floor(Date.now() / 1000), sid = rand(), exp = now + SESSION_S;
-  const sessions = [...(keepOthers ? u.sessions.filter(x => x.exp > now) : []), { sid, exp, at: now }].slice(-MAX_SESSIONS);
-  await saveUser({ ...u, sessions });
-  return { cookie: signSession(u.id, sid, exp), maxAge: SESSION_S, user: { id: u.id, name: u.name } };
+// 在锁内基于最新记录加一个会话。expectHash：调用方验证过的密码哈希；最新记录的密码已经变了就放弃（返回 null）
+function newSession(uid, { expectHash = null, keepOthers = true, pw = null } = {}) {
+  return withLock('u:' + uid, async () => {
+    const u = users.get(uid);
+    if (!u || (expectHash && u.pw.hash !== expectHash)) return null;
+    const now = Math.floor(Date.now() / 1000), sid = rand(), exp = now + SESSION_S;
+    const sessions = [...(keepOthers ? u.sessions.filter(x => x.exp > now) : []), { sid, exp, at: now }].slice(-MAX_SESSIONS);
+    await saveUser({ ...u, ...(pw ? { pw } : {}), sessions });
+    return { cookie: signSession(u.id, sid, exp), maxAge: SESSION_S, user: { id: u.id, name: u.name } };
+  });
 }
 
 export async function register({ name: raw, password, invite }) {
@@ -127,7 +142,7 @@ export async function register({ name: raw, password, invite }) {
     try { await kvSet('acct:index', [...users.keys(), id]); }
     catch (e) { await kvDel('acct:user:' + id).catch(() => {}); throw err('auth_unavailable', 503); }
     users.set(id, u); byName.set(name, id); acctState.users = users.size;
-    return await newSession(u);
+    return await newSession(id);
   } finally { pending.delete(name); }
 }
 
@@ -141,18 +156,19 @@ export async function login(raw, password) {
     return null;
   }
   if (!await verifyPassword(password, u.pw)) return null;
-  return newSession(u);
+  return newSession(u.id, { expectHash: u.pw.hash });   // 验证期间密码被改了：按失败处理
 }
 
-export async function logout(uid, sid) {
-  const u = users.get(uid);
-  if (!u) return;
-  const next = { ...u, sessions: u.sessions.filter(x => x.sid !== sid) };
-  users.set(uid, next);   // 先在内存里注销：即使 KV 写失败，这个 cookie 立刻失效
-  for (let i = 0; i < 2; i++) {
-    try { await kvSet('acct:user:' + uid, users.get(uid)); return; }
-    catch (e) { if (i) console.warn('[accounts] 登出写入失败，重启后该会话可能恢复', e.message); }
-  }
+export function logout(uid, sid) {
+  return withLock('u:' + uid, async () => {
+    const u = users.get(uid);
+    if (!u) return;
+    users.set(uid, { ...u, sessions: u.sessions.filter(x => x.sid !== sid) });   // 先在内存里注销：即使 KV 写失败，这个 cookie 立刻失效
+    for (let i = 0; i < 2; i++) {
+      try { await kvSet('acct:user:' + uid, users.get(uid)); return; }
+      catch (e) { if (i) console.warn('[accounts] 登出写入失败，重启后该会话可能恢复', e.message); }
+    }
+  });
 }
 
 export async function changePassword(uid, oldPw, newPw, invite) {
@@ -162,7 +178,9 @@ export async function changePassword(uid, oldPw, newPw, invite) {
   if (typeof oldPw !== 'string' || oldPw.length > 128 || !await verifyPassword(oldPw, u.pw)) throw err('bad_password', 401);
   if (!passwordOk(newPw, u.name, invite)) throw err('weak_password', 400);
   const pw = await hashPassword(newPw);
-  return newSession({ ...u, pw }, false);   // 其他设备全部下线，当前设备换新 cookie
+  const s = await newSession(uid, { expectHash: u.pw.hash, keepOthers: false, pw });   // 其他设备全部下线，当前设备换新 cookie
+  if (!s) throw err('bad_password', 409);   // 期间密码已被别处改过
+  return s;
 }
 
 export const userCount = () => users.size;
@@ -174,6 +192,14 @@ export const uidByName = name => byName.get(normalizeName(name)) || null;
 const emptyData = () => ({ favs: [], rev: 0, rules: [], digest: null });
 export const getData = uid => datas.get(uid) || emptyData();
 export async function saveData(uid, d) { await kvSet('acct:data:' + uid, d); datas.set(uid, d); }
+// 基于最新数据修改并保存；fn 返回新对象（返回 null 表示不改）。同一用户的修改排队，不会互相覆盖
+export function updateData(uid, fn) {
+  return withLock('d:' + uid, async () => {
+    const next = await fn(getData(uid));
+    if (next) await saveData(uid, next);
+    return next;
+  });
+}
 
 const cleanFav = f => {
   const s = { agency: String(f?.agency || '').slice(0, 20), id: String(f?.id || '').slice(0, 40), name: String(f?.name || '').slice(0, 80) };
@@ -185,20 +211,22 @@ export function getFavs(uid) { const d = getData(uid); return { favs: d.favs, re
 export async function setFavs(uid, favs, base) {
   needReady();
   if (!Array.isArray(favs)) throw err('invalid_favs', 400);
-  const d = getData(uid);
-  if (base !== d.rev) throw Object.assign(err('conflict', 409), { body: { favs: d.favs, rev: d.rev } });
-  const seen = new Set(), list = [];
-  for (const f of favs.map(cleanFav)) {
-    const k = `${f.agency}:${f.id}`;
-    if (!f.agency || !f.id || seen.has(k)) continue;
-    seen.add(k); list.push(f);
-    if (list.length >= MAX_FAVS) break;
-  }
-  const next = { ...d, favs: list, rev: d.rev + 1 };
-  if (next.digest) next.digest = { ...next.digest, stops: list.map(f => ({ agency: f.agency, id: f.id, name: f.name })) };
-  await saveData(uid, next);
+  const next = await updateData(uid, d => {
+    if (base !== d.rev) throw Object.assign(err('conflict', 409), { body: { favs: d.favs, rev: d.rev } });
+    const seen = new Set(), list = [];
+    for (const f of favs.map(cleanFav)) {
+      const k = `${f.agency}:${f.id}`;
+      if (!f.agency || !f.id || seen.has(k)) continue;
+      seen.add(k); list.push(f);
+      if (list.length >= MAX_FAVS) break;
+    }
+    const n = { ...d, favs: list, rev: d.rev + 1 };
+    if (n.digest) n.digest = { ...n.digest, stops: list.map(f => ({ agency: f.agency, id: f.id, name: f.name })) };
+    return n;
+  });
   return { favs: next.favs, rev: next.rev };
 }
 
 // 测试用
+export const _user = id => users.get(id);
 export function _reset() { users.clear(); byName.clear(); datas.clear(); pending.clear(); Object.assign(acctState, { ready: false, reason: '未载入', users: 0 }); }
