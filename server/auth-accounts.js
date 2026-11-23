@@ -139,7 +139,7 @@ export async function handleAccountAuth(req, res, url) {
       if (!crypto.timingSafeEqual(a, b)) { mark('auth:ip:' + ip); page(401, '邀请码不对。'); return true; }
       try {
         const s = await register({ name, password: String(f.get('password') || ''), invite, ref: growthOn() ? cleanRef(cookieOf(req, 'gta_ref')) : null });
-        html(res, 303, '', { location: '/', 'set-cookie': sessionCookie(req, s.cookie, s.maxAge) });
+        html(res, 303, '', { location: process.env.SEO_GUIDE === '1' ? '/live' : '/', 'set-cookie': sessionCookie(req, s.cookie, s.maxAge) });
       } catch (e) { page(e.code || 500, REG_MSG[e.message] || '注册失败，请稍后再试。'); }
       return true;
     }
@@ -147,7 +147,7 @@ export async function handleAccountAuth(req, res, url) {
     try { s = await login(name, String(f.get('password') || '')); }
     catch (e) { page(e.code || 500, REG_MSG[e.message] || '登录失败，请稍后再试。'); return true; }
     if (!s) { mark('auth:ip:' + ip); mark(nameKey); page(401, '用户名或密码不对。'); return true; }
-    html(res, 303, '', { location: '/', 'set-cookie': sessionCookie(req, s.cookie, s.maxAge) });
+    html(res, 303, '', { location: process.env.SEO_GUIDE === '1' ? '/live' : '/', 'set-cookie': sessionCookie(req, s.cookie, s.maxAge) });
     return true;
   }
   if (p === '/login' || p === '/register') {

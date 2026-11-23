@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: ohio
-    buildCommand: npm ci && npm run prefetch
+    buildCommand: npm ci --include=dev && npm run build:render && npm run prefetch
     startCommand: node server/index.js
     healthCheckPath: /healthz
     autoDeployTrigger: commit
@@ -15,6 +15,12 @@ services:
         value: "24"
       - key: STATIC_MAX_AGE_DAYS
         value: "30"
+      - key: SEO_GUIDE
+        value: "1"
+      - key: SITE_URL
+        value: https://gta-transit-live.onrender.com
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
       # 限制 V8 堆，解析 TTC 线路走向时及时回收，留在 512MB 内
       - key: NODE_OPTIONS
         value: --max-old-space-size=256

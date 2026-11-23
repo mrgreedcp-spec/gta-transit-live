@@ -14,6 +14,7 @@ import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCooki
 import { feedbackOn, loadFeedback, addFeedback, feedbackList } from './feedback.js';
 import { logout, changePassword, getFavs, setFavs, isAdmin, renameUser, adminList, adminResetPassword, normalizeName } from './accounts.js';
 import { startGrowth, growthStats, adminAsset } from './growth.js';
+import { createSeoGuide, markPrivateResponse, handleLivePage } from './seo-guide.js';
 
 async function readJson(req, limit = 16384) {
   const parts = []; let size = 0;   // 按字节收齐再解码：中文被切在两块数据中间也不会变乱码
@@ -34,6 +35,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
   '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon' };
 const NO_CACHE = /(\.html|\.webmanifest|\/sw\.js)$/;
 const now = () => Math.floor(Date.now() / 1000);
+const handleSeoGuide = await createSeoGuide();
 
 function compress(req, headers, buf) {
   if (buf.length > 1024 && /\bgzip\b/.test(req?.headers['accept-encoding'] || '')) {
@@ -250,7 +252,7 @@ async function handleApi(url, res, req) {
     } catch (e) { return send(res, e.code || 500, e.body || { error: e.message }); }
     return send(res, 404, { error: 'not found' });
   }
-  if (p === '/api/status') return send(res, 200, { ...(await apiStatus()), planner: plannerUsage(), push: { ...pushState }, kv: kvStatus(), feedback: feedbackOn() });
+  if (p === '/api/status') return send(res, 200, { ...(await apiStatus()), planner: plannerUsage(), push: { ...pushState }, kv: kvStatus(), feedback: feedbackOn(), guide: process.env.SEO_GUIDE === '1' });
   if (p.startsWith('/api/push/')) {
     const m = req.method;
     try {
@@ -397,9 +399,12 @@ http.createServer(async (req, res) => {
     if (url.pathname === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('ok'); }
     if (url.pathname === '/api/notify') return await handleNotify(req, res);
     if (url.pathname === '/api/notify/schedule') return await handleNotifySchedule(req, res);
+    if (await handleSeoGuide(req, res, url)) return;
+    markPrivateResponse(res, url);
     if (await handleAuth(req, res, url)) return;
     if (url.pathname.startsWith('/api/')) await handleApi(url, res, req);
     else if (url.pathname === '/admin' || url.pathname === '/admin.js') await serveAdmin(url, res, req);
+    else if (await handleLivePage(url, res, serveFile)) return;
     else await serveFile(url, res);
   } catch (e) {
     console.error(e);
