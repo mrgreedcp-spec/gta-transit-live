@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { kvPersistent } from './kv.js';
 import { clientKey } from './ratelimit.js';
 import { acctState, setSessionSecret, parseSession, verifySession, register, login, logout, initAccounts } from './accounts.js';
+import { growthOn, cleanRef, touch } from './growth.js';
 
 const INVITE = process.env.APP_PASSWORD || '';
 const SECRET = process.env.SESSION_SECRET || '';
@@ -104,6 +105,11 @@ const REG_MSG = { bad_username: '用户名要 3–20 位小写字母、数字或
 // 返回 true = 已处理（响应已发出）；false = 继续正常路由（已登录时 req.user 已设好）
 export async function handleAccountAuth(req, res, url) {
   const p = url.pathname, ip = clientKey(req);
+  // 渠道来源：带 ?ref= 打开页面时记 30 天（第一次来源优先，不覆盖）。302 到登录页、登录页本身都会带上这个 cookie
+  if (growthOn() && req.method === 'GET' && !p.startsWith('/api/')) {
+    const ref = cleanRef(url.searchParams.get('ref'));
+    if (ref && !cleanRef(cookieOf(req, 'gta_ref'))) res.setHeader('set-cookie', `gta_ref=${ref}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax${isHttps(req) ? '; Secure' : ''}`);
+  }
 
   if (p === '/logout') {   // 旧链接 / 书签：顺便注销服务器上的这个会话
     // 只认本站内点击或直接打开；别的网站链过来的什么都不清，回首页（防止被远程强制登出）
@@ -132,7 +138,7 @@ export async function handleAccountAuth(req, res, url) {
       const a = crypto.createHash('sha256').update(invite).digest(), b = crypto.createHash('sha256').update(INVITE).digest();
       if (!crypto.timingSafeEqual(a, b)) { mark('auth:ip:' + ip); page(401, '邀请码不对。'); return true; }
       try {
-        const s = await register({ name, password: String(f.get('password') || ''), invite });
+        const s = await register({ name, password: String(f.get('password') || ''), invite, ref: growthOn() ? cleanRef(cookieOf(req, 'gta_ref')) : null });
         html(res, 303, '', { location: '/', 'set-cookie': sessionCookie(req, s.cookie, s.maxAge) });
       } catch (e) { page(e.code || 500, REG_MSG[e.message] || '注册失败，请稍后再试。'); }
       return true;
@@ -155,6 +161,7 @@ export async function handleAccountAuth(req, res, url) {
   if (user) {
     if (req.method !== 'GET' && req.method !== 'HEAD' && badOrigin(req)) { json(res, 403, { error: 'bad_origin' }); return true; }
     if (user.mustChange && p.startsWith('/api/') && !MUST_OK.has(p)) { json(res, 403, { error: 'must_change_password' }); return true; }
+    touch(user.id);   // 活跃度：只记内存
     req.user = user;
     return false;
   }

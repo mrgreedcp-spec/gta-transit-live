@@ -11,7 +11,8 @@ import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, 
   usePushAccounts, acctRules, acctAddRule, acctDeleteRule, acctGetDigest, acctSetDigest, acctUnsubscribe, acctSendTest, acctSendDigestNow, rebindSession, deviceCountByUser } from './push.js';
 import { kvStatus } from './kv.js';
 import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCookie, clearCookies } from './auth-accounts.js';
-import { logout, changePassword, getFavs, setFavs, isAdmin, renameUser, adminList, adminResetPassword } from './accounts.js';
+import { logout, changePassword, getFavs, setFavs, isAdmin, renameUser, adminList, adminResetPassword, normalizeName } from './accounts.js';
+import { startGrowth, growthStats, adminAsset } from './growth.js';
 
 async function readJson(req, limit = 16384) {
   let data = '';
@@ -193,6 +194,7 @@ async function handleApi(url, res, req) {
         const list = adminList(req.user.id), counts = deviceCountByUser();
         return send(res, 200, { ...list, users: list.users.map(u => ({ ...u, devices: counts[u.id] || 0 })) });
       }
+      if (p === '/api/admin/growth' && req.method === 'GET') return send(res, 200, growthStats(req.user.id, deviceCountByUser()));
       if (p === '/api/admin/reset' && req.method === 'POST') {
         if (limited('write') || limited('login')) return;
         const b = (await readJson(req, 2048)) || {};
@@ -363,6 +365,15 @@ async function serveFile(url, res) {
   res.writeHead(404); res.end('not found');
 }
 
+// 增长仪表盘页面：文件在仓库 admin/ 目录，只给管理员；其他人和不存在的路径一样 404
+async function serveAdmin(url, res, req) {
+  const f = adminAsset(url.pathname, req.user?.id);
+  if (!f) { res.writeHead(404); return res.end('not found'); }
+  const raw = await readFile(path.join(ROOT, 'admin', f));
+  res.writeHead(200, { 'content-type': f.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(raw);
+}
+
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
@@ -371,6 +382,7 @@ http.createServer(async (req, res) => {
     if (url.pathname === '/api/notify/schedule') return await handleNotifySchedule(req, res);
     if (await handleAuth(req, res, url)) return;
     if (url.pathname.startsWith('/api/')) await handleApi(url, res, req);
+    else if (url.pathname === '/admin' || url.pathname === '/admin.js') await serveAdmin(url, res, req);
     else await serveFile(url, res);
   } catch (e) {
     console.error(e);
@@ -392,6 +404,7 @@ http.createServer(async (req, res) => {
 
 startAccounts();
 usePushAccounts(accountsOn);
+if (accountsOn && normalizeName(process.env.ADMIN_USER || '')) startGrowth().catch(e => console.warn('[growth] 启动失败', e.message));
 
 // 推送提醒：用和到站接口相同的逻辑取到站
 initPush(async (agency, stopId) => (await apiArrivals(agency, stopId, { limit: 15, maxWaitMs: 8000 }))[1].arrivals || [])

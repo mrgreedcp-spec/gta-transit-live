@@ -3,8 +3,10 @@
 // Key（kv.js 自动加 gta: 前缀）：
 //   acct:index        = [uid...]
 //   acct:user:<uid>   = { id, name, pw:{ salt, hash, N, r, p }, created, sessions:[{ sid, exp, at }], mustChange? }
+//                       ref?: 注册来源渠道（?ref= 带来的短码，旧记录没有 = 未知）
 //                       mustChange: 管理员重置过密码，用户改好前只能改密码或登出（旧记录没有这个字段 = false）
 //   acct:data:<uid>   = { favs:[...], rev, rules:[...], digest }   首次写入时才创建
+//   acct:seen / acct:dau：活跃度（由 growth.js 维护）
 import crypto from 'node:crypto';
 import { kvGet, kvSet, kvDel } from './kv.js';
 
@@ -133,7 +135,7 @@ function newSession(uid, { expectHash = null, keepOthers = true, pw = null, plai
   });
 }
 
-export async function register({ name: raw, password, invite }) {
+export async function register({ name: raw, password, invite, ref = null }) {
   needReady();
   const name = normalizeName(raw);
   if (!name) throw err('bad_username', 400);
@@ -144,7 +146,7 @@ export async function register({ name: raw, password, invite }) {
   try {
     const pw = await hashPassword(password);
     const id = rand();
-    const u = { id, name, pw, created: Date.now(), sessions: [] };
+    const u = { id, name, pw, created: Date.now(), sessions: [], ...(typeof ref === 'string' && /^[a-z0-9_-]{1,20}$/.test(ref) ? { ref } : {}) };
     await kvSet('acct:user:' + id, u);
     await withLock('index', async () => {   // 并发注册时索引按顺序写，每次都包含已注册的全部用户
       try { await kvSet('acct:index', [...users.keys(), id]); }
@@ -259,6 +261,8 @@ export function sessionAlive(uid, sid) {
   const now = Date.now() / 1000;
   return !!users.get(uid)?.sessions.some(x => x.sid === sid && x.exp > now);
 }
+// 增长仪表盘用：只给统计需要的字段（不含用户名、密码、会话）
+export const growthUsers = () => [...users.values()].map(u => ({ id: u.id, created: u.created, ref: u.ref || null, favs: datas.get(u.id)?.favs?.length || 0 }));
 export const userCount = () => users.size;
 export const userIds = () => [...users.keys()];
 export const userById = id => { const u = users.get(id); return u ? { id: u.id, name: u.name } : null; };

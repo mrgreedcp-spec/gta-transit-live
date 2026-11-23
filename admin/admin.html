@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a66c2">
+<title>GTA 公交实时 · 增长仪表盘</title>
+<style>
+:root { --bg: #eef2f6; --card: #fff; --ink: #1b2430; --ink2: #5b6573; --line: #e3e8ee; --accent: #0a66c2; --accent2: #7fb0e3; }
+@media (prefers-color-scheme: dark) { :root { --bg: #11161c; --card: #1a2129; --ink: #e8edf2; --ink2: #9aa5b1; --line: #2a333d; --accent: #5aa2ec; --accent2: #2f5f91; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px -apple-system, "PingFang SC", system-ui, sans-serif; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+header h1 { font-size: 17px; margin: 0; flex: 1; }
+header a, header button { font: inherit; font-size: 14px; color: var(--accent); background: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; text-decoration: none; cursor: pointer; }
+main { max-width: 920px; margin: 0 auto; padding: 0 12px 24px; display: grid; gap: 12px; }
+.meta { color: var(--ink2); font-size: 12px; padding: 0 4px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.kpi { background: var(--card); border-radius: 12px; padding: 12px; }
+.kpi .v { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--ink2); font-size: 12px; margin-top: 2px; }
+.card { background: var(--card); border-radius: 12px; padding: 14px; position: relative; }
+.card h2 { font-size: 15px; margin: 0 0 2px; } .card .sub { color: var(--ink2); font-size: 12px; margin-bottom: 8px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--ink2); font-size: 10px; }
+.grid line { stroke: var(--line); stroke-width: 1; }
+.bar { fill: var(--accent); } .bar.hit:hover + .bar, .bar.on { fill: var(--accent2); }
+.hit { fill: transparent; cursor: default; }
+.lineS { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.dot { fill: var(--accent); stroke: var(--card); stroke-width: 2; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--card); font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, -110%); display: none; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 7px 6px; border-top: 1px solid var(--line); } th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink2); font-weight: 500; font-size: 12px; border-top: 0; }
+.msg { background: var(--card); border-radius: 12px; padding: 16px; }
+details summary { color: var(--accent); cursor: pointer; font-size: 13px; margin-top: 8px; }
+.hint { color: var(--ink2); font-size: 12px; line-height: 1.6; }
+code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header><a href="/">← 返回</a><h1>增长仪表盘</h1><button id="refresh" type="button">刷新</button></header>
+<main id="main">
+  <div class="msg" id="msg">载入中…</div>
+</main>
+<template id="tpl">
+  <div class="meta" id="meta"></div>
+  <div class="kpis" id="kpis"></div>
+  <section class="card"><h2>每日新注册</h2><div class="sub" id="signSub"></div><div id="signChart"></div>
+    <details><summary>数据表</summary><table id="signTable"></table></details></section>
+  <section class="card"><h2>每日活跃账号</h2><div class="sub" id="dauSub"></div><div id="dauChart"></div>
+    <details><summary>数据表</summary><table id="dauTable"></table></details></section>
+  <section class="card"><h2>渠道来源</h2><div class="sub">激活 = 收藏了站点或开了到站提醒</div><table id="chTable"></table>
+    <p class="hint">推广链接后面加 <code>?ref=渠道名</code>（小写字母、数字、- 或 _，最多 20 位），例如 <code>/?ref=xhs</code>。打开链接后 30 天内注册都算这个渠道；没带或换了浏览器的算「未知」。</p></section>
+</template>
+<script src="/admin.js" defer></script>
+</body>
+</html>

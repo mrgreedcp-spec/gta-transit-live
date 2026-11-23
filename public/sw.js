@@ -1,6 +1,6 @@
 // 外壳缓存：网络优先，3 秒超时或失败时用缓存。/api/ 和跨域（地图瓦片）不处理。
 // 改了前端文件就把 VERSION 加 1。
-const VERSION = 'v18';
+const VERSION = 'v19';
 const CACHE = `gta-shell-${VERSION}`;
 const SHELL = [
   '/', '/app.js', '/plan.js', '/push.js', '/style.css', '/manifest.webmanifest',
@@ -22,7 +22,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   const url = new URL(req.url);
-  if (req.method !== 'GET' || url.origin !== location.origin || /^\/(api\/|login|logout|register)/.test(url.pathname)) return;
+  if (req.method !== 'GET' || url.origin !== location.origin || /^\/(api\/|login|logout|register|admin)/.test(url.pathname)) return;
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
     const net = fetch(req).then(res => { if (res.ok && !res.redirected) cache.put(req, res.clone()); return res; }); // 不缓存登录跳转

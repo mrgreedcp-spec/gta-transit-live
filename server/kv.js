@@ -54,4 +54,11 @@ export async function kvDel(key) {
   if (kvKind === 'upstash') return redis(['DEL', PREFIX + key]);
   delete (await loadFile())[key]; saveFile();
 }
+// 退出前把文件后端还没落盘的写入立刻写掉（Upstash 每次写都已完成，无需处理）
+export async function kvFlush() {
+  if (kvKind === 'upstash' || !saveTimer || !mem) return;
+  clearTimeout(saveTimer); saveTimer = null;
+  await mkdir(path.dirname(FILE), { recursive: true });
+  await writeFile(FILE, JSON.stringify(mem));
+}
 export function kvStatus() { return { kind: kvKind, persistent: kvPersistent, cmdsToday: stats.cmds, errors: stats.errors, lastError: stats.lastError }; }
