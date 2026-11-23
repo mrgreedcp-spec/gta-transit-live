@@ -31,25 +31,28 @@ const sub = n => ({ endpoint: `https://fcm.googleapis.com/fcm/send/${n}`, keys: 
 const ep = n => sub(n).endpoint;
 const rule = { stop: { agency: 'miway', id: 'S1', name: '站一' }, route: '9', lead: 5, days: [2], from: '07:00', to: '09:00' };
 
-let alice, bob, devOld, devA1, devA2, devB;
+let alice, bob, devOld, devA2, devB, sA1, sA2, sB;
+const sidOf = r => r.cookie.split('.')[2];   // 会话 cookie: v1.<uid>.<sid>.<exp>.<mac>
 test('认领：旧设备的规则、摘要复制进账号，设备上原数据保留；重复认领不重复', async () => {
-  alice = (await A.register({ name: 'alice', password: 'longpassword', invite: 'inv' })).user.id;
-  bob = (await A.register({ name: 'bob', password: 'longpassword', invite: 'inv' })).user.id;
+  const ra = await A.register({ name: 'alice', password: 'longpassword', invite: 'inv' });
+  const rb = await A.register({ name: 'bob', password: 'longpassword', invite: 'inv' });
+  alice = ra.user.id; bob = rb.user.id; sA1 = sidOf(ra); sB = sidOf(rb);
+  sA2 = sidOf(await A.login('alice', 'longpassword'));   // alice 第二台设备的会话
   devOld = (await P.subscribe(sub('old'), 'zh')).id;
   P.usePushAccounts(false); await P.addRule(devOld, rule); P.usePushAccounts(true);
   await P.setDigest(devOld, { enabled: true, at: '09:30', days: [2], stops: [{ agency: 'miway', id: 'S1', name: '站一' }] });
-  const r = await P.subscribe(sub('old'), 'zh', alice);
+  const r = await P.subscribe(sub('old'), 'zh', alice, sA1);
   assert.equal(r.rules.length, 1);
   assert.equal(P.acctRules(alice).length, 1);
   assert.equal(P.acctGetDigest(alice).at, '09:30');
   assert.equal(store.get('push:dev:' + devOld).rules.length, 1);   // 设备上的原规则还在（回滚用）
-  await P.subscribe(sub('old'), 'zh', alice);
+  await P.subscribe(sub('old'), 'zh', alice, sA1);
   assert.equal(P.acctRules(alice).length, 1);
 });
 
 test('一个账号两台设备都收到，同一班车只推一次；别的账号收不到', async () => {
-  devA2 = (await P.subscribe(sub('a2'), 'zh', alice)).id;
-  devB = (await P.subscribe(sub('b1'), 'zh', bob)).id;
+  devA2 = (await P.subscribe(sub('a2'), 'zh', alice, sA2)).id;
+  devB = (await P.subscribe(sub('b1'), 'zh', bob, sB)).id;
   sent.length = 0;
   await tick(30);
   assert.deepEqual(sent.map(s => s.ep).sort(), [ep('a2'), ep('old')].sort());
@@ -66,9 +69,10 @@ test('账号之间隔离：bob 看不到、删不掉 alice 的规则和设备', 
   await assert.rejects(P.acctSendTest(A.uidByName('nobody') || 'zzz'), /no_device/);
 });
 
-test('不带账号重新订阅（旧接口）不丢 userId', async () => {
+test('不带账号重新订阅（旧接口）不丢 userId 和会话', async () => {
   await P.subscribe(sub('a2'), 'zh');
   assert.equal(store.get('push:dev:' + devA2).userId, alice);
+  assert.equal(store.get('push:dev:' + devA2).sid, sA2);
 });
 
 test('失效设备（410）被清掉，另一台照常收到', async () => {
@@ -95,19 +99,40 @@ test('NOTIFY_USER：外部提醒只发给这个账号', async () => {
   assert.deepEqual(sent.map(s => s.ep), [ep('old')]);
 });
 
+test('回归：NOTIFY_USER 找不到账号时报 404，不退回发给所有人', async () => {
+  process.env.NOTIFY_USER = 'nobody_here'; sent.length = 0;
+  await assert.rejects(P.notifyAll({ title: 't', body: 'x', tag: 'n', key: 'k9' }), e => e.code === 404 && /notify_user_not_found/.test(e.message));
+  assert.equal(sent.length, 0);
+  process.env.NOTIFY_USER = 'alice';
+});
+
+test('回归：会话失效（退出登录）后，这台设备不再收这个账号的提醒', async () => {
+  const devA3 = (await P.subscribe(sub('a3'), 'zh', alice, sA2)).id;   // sA2 仍有效
+  sent.length = 0; await P.acctSendTest(alice);
+  assert.deepEqual(sent.map(s => s.ep).sort(), [ep('a3'), ep('old')].sort());
+  await A.logout(alice, sA2);
+  sent.length = 0; await P.acctSendTest(alice);
+  assert.deepEqual(sent.map(s => s.ep), [ep('old')]);
+  sent.length = 0; await P.notifyAll({ title: 't', body: 'x', tag: 'n', key: 'k8' });
+  assert.deepEqual(sent.map(s => s.ep), [ep('old')]);
+  assert.ok(store.has('push:dev:' + devA3));   // 设备记录还在，重新登录后再认领即可
+  await P.acctSendTest(bob);   // bob 的设备不受影响（没有设备会抛 no_device）
+});
+
 test('关掉账号模式：认领过的设备按自己保存的快照推送', async () => {
   P.usePushAccounts(false);
   await P.acctAddRule(alice, { ...rule, stop: { agency: 'miway', id: 'S2', name: '站二' } });   // 账号里新加的，旧模式看不到
   sent.length = 0;
   const r = await P.notifyAll({ title: '通勤', body: 'y', tag: 'n', key: 'k2' });
-  assert.equal(r.devices, 2);   // 不再按 NOTIFY_USER 过滤（old + b1；a2 已因 410 删除）
+  assert.equal(r.devices, 3);   // 不再按 NOTIFY_USER 过滤（old + b1 + a3；a2 已因 410 删除）
   assert.deepEqual(P.getRules(devOld).map(x => x.stop.id), ['S1']);
   P.usePushAccounts(true);
 });
 
-test('回归：账号还没载入时摘要时间表回 503（别让 Mac 缓存空表）', async () => {
+test('回归：账号还没载入时摘要时间表、NOTIFY_USER 外部提醒都回 503', async () => {
   A._reset();
   assert.throws(() => P.digestSchedule(), /accounts_loading/);
+  await assert.rejects(P.notifyAll({ title: 't', body: 'x', tag: 'n', key: 'k7' }), e => e.code === 503);
   await A.initAccounts();
   assert.deepEqual(P.digestSchedule(), [{ at: '09:30', days: [2] }]);
 });

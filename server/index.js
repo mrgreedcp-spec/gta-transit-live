@@ -215,7 +215,7 @@ async function handleApi(url, res, req) {
       if (m !== 'GET' && limited('write')) return;
       if (req.user) {   // 账号模式：规则、摘要读写当前账号；设备 id 不再作为归属依据
         const u = req.user.id;
-        if (p === '/api/push/subscribe' && m === 'POST') { const b = await readJson(req); return send(res, 200, await subscribe(b.sub || {}, b.lang, u)); }
+        if (p === '/api/push/subscribe' && m === 'POST') { const b = await readJson(req); return send(res, 200, await subscribe(b.sub || {}, b.lang, u, req.user.sid)); }
         if (p === '/api/push/subscribe' && m === 'DELETE') { await acctUnsubscribe(u, q.get('id')); return send(res, 200, { ok: true }); }
         if (p === '/api/push/rules' && m === 'GET') return send(res, 200, acctRules(u));
         if (p === '/api/push/rules' && m === 'POST') { const b = await readJson(req); return send(res, 200, await acctAddRule(u, b.rule || {})); }

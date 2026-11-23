@@ -3,11 +3,16 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-const store = new Map(); let kvCalls = 0, failIndexWrite = false;
+const store = new Map(); let kvCalls = 0, failIndexWrite = false, slowIndex = false;
 mock.module(new URL('../server/kv.js', import.meta.url).href, { namedExports: {
   kvPersistent: true,
   kvGet: async k => { kvCalls++; return store.has(k) ? structuredClone(store.get(k)) : null; },
-  kvSet: async (k, v) => { kvCalls++; if (failIndexWrite && k === 'acct:index') throw new Error('boom'); store.set(k, structuredClone(v)); },
+  kvSet: async (k, v) => {
+    kvCalls++; if (failIndexWrite && k === 'acct:index') throw new Error('boom');
+    v = structuredClone(v);
+    if (slowIndex && k === 'acct:index') await new Promise(r => setTimeout(r, 400));   // 模拟 Upstash 网络延迟
+    store.set(k, v);
+  },
   kvDel: async k => { kvCalls++; store.delete(k); },
 } });
 process.env.ACCOUNTS = '1';
@@ -149,7 +154,12 @@ test('人数已满 403；索引写失败时回滚', async () => {
   assert.equal(r.res.code, 503);
   assert.ok(![...store.values()].some(v => v?.name === 'dave_x'));
   failIndexWrite = false;
-  while (A.userCount() < 6) assert.equal((await reg('u' + A.userCount() + 'x')).res.code, 303);
+  // 回归：剩下的名额并发注册，索引不能丢人（重启测试里检查人数）
+  const need = 6 - A.userCount();
+  slowIndex = true;
+  const rs = await Promise.all(Array.from({ length: need }, (_, i) => reg('par' + i)));
+  slowIndex = false;
+  assert.deepEqual(rs.map(r => r.res.code), Array(need).fill(303));
   assert.equal((await reg('toomany')).res.code, 403);
 });
 
@@ -158,6 +168,7 @@ test('重启后从存储恢复，会话仍有效', async () => {
   const page = await asUser(alice, '/', { headers: { cookie: `gta_sess=${alice}`, accept: 'text/html' } });
   assert.equal(page.res.code, 503);   // 未载入：不踢回登录页
   await A.initAccounts();
+  assert.equal(A.userCount(), 6);   // 并发注册的人都在索引里
   assert.equal((await asUser(alice)).handled, false);
   assert.equal(A.getFavs((await asUser(alice)).req.user.id).favs.length, 100);
 });

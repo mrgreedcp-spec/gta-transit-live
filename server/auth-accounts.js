@@ -104,7 +104,9 @@ export async function handleAccountAuth(req, res, url) {
   const p = url.pathname, ip = clientKey(req);
 
   if (p === '/logout') {   // 旧链接 / 书签：顺便注销服务器上的这个会话
-    const u = verifySession(cookieOf(req, COOKIE));
+    // 只在本站内点击（或直接打开）时注销服务端会话；别的网站链过来的只清 cookie，不能远程把会话删掉
+    const site = req.headers['sec-fetch-site'];
+    const u = !site || site === 'same-origin' || site === 'none' ? verifySession(cookieOf(req, COOKIE)) : null;
     if (u) await logout(u.id, u.sid).catch(() => {});
     html(res, 302, '', { location: '/login', 'set-cookie': clearCookies }); return true;
   }

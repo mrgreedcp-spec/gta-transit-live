@@ -63,7 +63,8 @@ export function parseSession(v) {
   const [, uid, sid, exp, m] = parts;
   if (!/^\d+$/.test(exp) || +exp < Date.now() / 1000) return null;
   const want = mac(`v1.${uid}.${sid}.${exp}`);
-  if (m.length !== want.length || !crypto.timingSafeEqual(Buffer.from(m), Buffer.from(want))) return null;
+  const a = Buffer.from(m), b = Buffer.from(want);   // 按字节比较：非 ASCII 字符不会让 timingSafeEqual 抛错
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
   return { uid, sid, exp: +exp };
 }
 export function verifySession(v) {
@@ -139,9 +140,11 @@ export async function register({ name: raw, password, invite }) {
     const id = rand();
     const u = { id, name, pw, created: Date.now(), sessions: [] };
     await kvSet('acct:user:' + id, u);
-    try { await kvSet('acct:index', [...users.keys(), id]); }
-    catch (e) { await kvDel('acct:user:' + id).catch(() => {}); throw err('auth_unavailable', 503); }
-    users.set(id, u); byName.set(name, id); acctState.users = users.size;
+    await withLock('index', async () => {   // 并发注册时索引按顺序写，每次都包含已注册的全部用户
+      try { await kvSet('acct:index', [...users.keys(), id]); }
+      catch (e) { await kvDel('acct:user:' + id).catch(() => {}); throw err('auth_unavailable', 503); }
+      users.set(id, u); byName.set(name, id); acctState.users = users.size;
+    });
     return await newSession(id);
   } finally { pending.delete(name); }
 }
@@ -183,6 +186,11 @@ export async function changePassword(uid, oldPw, newPw, invite) {
   return s;
 }
 
+// 这个会话还有效吗（推送用：设备绑定时记下会话，会话失效后设备不再收这个账号的提醒）
+export function sessionAlive(uid, sid) {
+  const now = Date.now() / 1000;
+  return !!users.get(uid)?.sessions.some(x => x.sid === sid && x.exp > now);
+}
 export const userCount = () => users.size;
 export const userIds = () => [...users.keys()];
 export const userById = id => { const u = users.get(id); return u ? { id: u.id, name: u.name } : null; };

@@ -9,7 +9,7 @@ import path from 'node:path';
 import * as webpush from 'web-push';
 import { kvGet, kvSet, kvDel, kvPersistent } from './kv.js';
 import { digestDue, digestLastCall, buildDigest, cleanDigest } from './digest.js';
-import { getData, updateData, uidByName, acctState } from './accounts.js';
+import { getData, updateData, uidByName, acctState, sessionAlive } from './accounts.js';
 
 // 账号模式（index.js 在 ACCOUNTS 生效时打开）：设备带 userId 的，提醒规则和摘要存在账号里（acct:data:<uid>），
 // 发到该账号的全部设备；没认领的设备照旧用自己的规则。关闭时完全按设备（与改动前一致），设备上保留的是认领那一刻的快照。
@@ -76,14 +76,14 @@ function validSub(sub) {
   } catch { return false; }
 }
 
-export async function subscribe(sub, lang, userId = null) {
+export async function subscribe(sub, lang, userId = null, sid = null) {
   if (!ready) throw Object.assign(new Error(pushState.reason || 'push_disabled'), { code: 503 });
   if (!validSub(sub)) throw Object.assign(new Error('invalid_subscription'), { code: 400 });
   const id = devId(sub.endpoint);
   const old = devices.get(id);
   if (!old && devices.size >= MAX_DEVICES) throw Object.assign(new Error('too_many_devices'), { code: 429 });
-  if (userId) return claimDevice(id, old, sub, lang, userId);
-  devices.set(id, { sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now(), digest: old?.digest, ...(old?.userId ? { userId: old.userId } : {}) });
+  if (userId) return claimDevice(id, old, sub, lang, userId, sid);
+  devices.set(id, { sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now(), digest: old?.digest, ...(old?.userId ? { userId: old.userId, sid: old.sid } : {}) });
   await saveDevice(id);
   if (!old) await saveIndex();
   return { id, rules: devices.get(id).rules };
@@ -91,9 +91,9 @@ export async function subscribe(sub, lang, userId = null) {
 
 // 账号模式下订阅 = 把这台设备绑到当前账号。第一次绑定时把设备上原有的规则、摘要复制进账号（按内容去重），设备上的原数据保留不删。
 const ruleSig = r => JSON.stringify([r.stop?.agency, r.stop?.id, r.route, r.lead, r.days, r.from, r.to, r.once]);
-async function claimDevice(id, old, sub, lang, userId) {
+async function claimDevice(id, old, sub, lang, userId, sid) {
   const keys = { p256dh: sub.keys.p256dh, auth: sub.keys.auth };
-  const same = old && old.userId === userId && old.lang === (lang || 'zh') && old.sub.keys.p256dh === keys.p256dh && old.sub.keys.auth === keys.auth;
+  const same = old && old.userId === userId && old.sid === sid && old.lang === (lang || 'zh') && old.sub.keys.p256dh === keys.p256dh && old.sub.keys.auth === keys.auth;
   if (!same) {
     if (old && !old.userId) {   // 只认领从没绑过账号的设备的旧数据；换账号登录不把别人的规则带过来
       await updateData(userId, data => {
@@ -103,7 +103,7 @@ async function claimDevice(id, old, sub, lang, userId) {
         return rules.length !== (data.rules || []).length || digest !== data.digest ? { ...data, rules, digest } : null;
       });
     }
-    devices.set(id, { sub: { endpoint: sub.endpoint, keys }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now(), digest: old?.digest, userId });
+    devices.set(id, { sub: { endpoint: sub.endpoint, keys }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now(), digest: old?.digest, userId, sid });
     await saveDevice(id);
     if (!old) await saveIndex();
   }
@@ -243,7 +243,11 @@ async function sendTo(ids, payload, ttl) { let n = 0; for (const id of ids) if (
 function targets() {
   const out = [], byUser = new Map();
   for (const [id, d] of devices) {
-    if (acctMode && d.userId) { if (!byUser.has(d.userId)) byUser.set(d.userId, []); byUser.get(d.userId).push(id); continue; }
+    if (acctMode && d.userId) {
+      // 绑定它的会话已失效（改密码、过期、在别处退出）：这台设备不再收这个账号的提醒，也不退回按设备推旧快照
+      if (sessionAlive(d.userId, d.sid)) { if (!byUser.has(d.userId)) byUser.set(d.userId, []); byUser.get(d.userId).push(id); }
+      continue;
+    }
     out.push({ key: id, rules: d.rules, digest: d.digest, devIds: [id], lang: d.lang, update: async fn => { fn(d); await saveDevice(id); } });
   }
   for (const [uid, ids] of byUser) {
@@ -256,7 +260,7 @@ function targets() {
 }
 
 // ---------- 账号模式：按账号读写规则和摘要（index.js 在 req.user 存在时调用） ----------
-const devsOf = uid => [...devices].filter(([, d]) => d.userId === uid).map(([id]) => id);
+const devsOf = uid => [...devices].filter(([, d]) => d.userId === uid && sessionAlive(uid, d.sid)).map(([id]) => id);
 export const acctRules = uid => getData(uid).rules || [];
 export async function acctAddRule(uid, r) {
   const rule = makeRule(r);
@@ -312,8 +316,13 @@ export async function notifyAll({ title, body, tag, key }) {
   for (const [k, t] of notified) if (now - t > 6 * 3600e3) notified.delete(k);
   if (key && notified.has(key)) return { devices: devices.size, sent: 0, duplicate: true };
   // 账号模式下设了 NOTIFY_USER（用户名）：只发给这个账号的设备（Mac 的通勤提醒只给本人）
-  const only = acctMode && process.env.NOTIFY_USER ? uidByName(process.env.NOTIFY_USER) : null;
-  const ids = only ? devsOf(only) : [...devices.keys()];
+  let ids = [...devices.keys()];
+  if (acctMode && process.env.NOTIFY_USER) {   // 指定了账号就只发给它；账号没载入或找不到时绝不退回发给所有人
+    if (!acctState.ready) throw Object.assign(new Error('accounts_loading'), { code: 503 });
+    const only = uidByName(process.env.NOTIFY_USER);
+    if (!only) throw Object.assign(new Error('notify_user_not_found'), { code: 404 });
+    ids = devsOf(only);
+  }
   const sent = await sendTo(ids, { title, body, tag, url: '/' }, 1800);
   if (key && sent) notified.set(key, now);
   return { devices: ids.length, sent };

@@ -544,28 +544,35 @@ const isFav = s => favs.some(f => favKey(f) === favKey(s));
 const saveFavs = () => { ls.set('favStops', favs); window.syncDigestStops?.(); if (window.account) pushFavsSoon(); };
 
 // ---------- 收藏跟账号同步（账号模式） ----------
-// 本浏览器第一次登录这个账号：服务器和本地取并集；之后没有待上传的改动时以服务器为准。改动 1.5 秒后上传，带版本号，冲突时并集后重试一次。
+// 本浏览器第一次登录账号（本地收藏还没归属任何账号）：服务器和本地取并集；本地收藏属于别的账号：直接用服务器的，不上传别人的收藏。
+// 之后没有待上传的改动时以服务器为准。改动 1.5 秒后上传，带版本号，冲突时并集后重试一次。
 const unionFavs = (a, b) => { const seen = new Set(a.map(favKey)); return [...a, ...b.filter(f => !seen.has(favKey(f)))]; };
-let favsTimer = null, favsPulled = 0;
-function pushFavsSoon() { ls.set('favsDirty', true); clearTimeout(favsTimer); favsTimer = setTimeout(() => pushFavs().catch(() => {}), 1500); }
+let favsTimer = null, favsPulled = 0, favsEdits = 0;   // favsEdits：本页的改动计数，上传返回时用来判断期间有没有新改动
+function pushFavsSoon() { favsEdits++; ls.set('favsDirty', true); clearTimeout(favsTimer); favsTimer = setTimeout(() => pushFavs().catch(() => {}), 1500); }
 async function pushFavs(retry = true) {
+  const ed = favsEdits;
   const r = await fetch('/api/favs', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ favs, base: ls.get('favsRev', 0) }) });
   const j = await r.json().catch(() => ({}));
   if (r.status === 409 && retry && Array.isArray(j.favs)) { favs = unionFavs(j.favs, favs); ls.set('favStops', favs); ls.set('favsRev', j.rev); renderFavs(); return pushFavs(false); }
   if (!r.ok) return;   // 留着 favsDirty，下次打开或回到前台再传
-  ls.set('favsRev', j.rev); ls.set('favsDirty', false);
+  ls.set('favsRev', j.rev);
+  if (favsEdits === ed) ls.set('favsDirty', false);   // 上传期间又改过：保持待上传，等计时器再传
 }
 async function pullFavs() {
   if (!window.account || Date.now() - favsPulled < 60000) return;
   favsPulled = Date.now();
-  const r = await fetch('/api/favs', { headers: { accept: 'application/json' } });
-  if (!r.ok) return;
+  const r = await fetch('/api/favs', { headers: { accept: 'application/json' } }).catch(() => null);
+  if (!r?.ok) { favsPulled = 0; return; }   // 没拿到：下次回到前台再试
   const { favs: srv, rev } = await r.json();
-  if (ls.get('favsUid', null) !== account.id) {
+  const owner = ls.get('favsUid', null);
+  if (owner !== null && owner !== account.id) {   // 本地是别的账号留下的：换成这个账号的，丢掉别人的待上传改动
+    ls.set('favsUid', account.id); ls.set('favsRev', rev); ls.set('favsDirty', false);
+    favs = srv; ls.set('favStops', favs); renderFavs(); loadFavArrivals().catch(() => {});
+  } else if (owner === null) {   // 登录前的本地收藏：并进账号
     const merged = unionFavs(srv, favs);
     ls.set('favsUid', account.id); ls.set('favsRev', rev);
     favs = merged; ls.set('favStops', favs); renderFavs(); loadFavArrivals().catch(() => {});
-    if (merged.length !== srv.length) await pushFavs();
+    if (merged.length !== srv.length) { favsEdits++; ls.set('favsDirty', true); await pushFavs(); }   // 先记待上传：失败了下次再传
   } else if (ls.get('favsDirty', false)) {
     await pushFavs();
   } else if (rev !== ls.get('favsRev', 0)) {
@@ -722,10 +729,12 @@ const linkify = s => esc(s).replace(/(https?:\/\/\S+)/g, '<a href="$1" target="_
 
 // ---------- 账号（服务端开了 ACCOUNTS 才有；旧模式 /api/account/me 返回 404） ----------
 window.account = null;
-async function initAccount() {
-  const r = await fetch('/api/account/me', { headers: { accept: 'application/json' } });
+async function initAccount(wait = 2000) {
+  const r = await fetch('/api/account/me', { headers: { accept: 'application/json' } }).catch(() => null);
+  // 服务冷启动（503）或断网：稍后重试，不然这一页一直当成旧模式，收藏改动不会同步
+  if (!r || r.status === 503) { setTimeout(() => initAccount(Math.min(wait * 2, 30000)).catch(() => {}), wait); return; }
   if (r.status === 401) { location.href = '/login'; return; }
-  if (!r.ok) return;
+  if (!r.ok) return;   // 404 = 旧模式
   window.account = (await r.json()).user;
   document.body.classList.add('acct-mode');
   $('#acctName').textContent = account.name;
