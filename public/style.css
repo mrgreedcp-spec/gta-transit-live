@@ -239,3 +239,14 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   #searchBox { left: calc(10px + env(safe-area-inset-left)); }
   #filterBtn { right: calc(10px + env(safe-area-inset-right)); }
 }
+
+.admin-list { margin-top: 6px; display: grid; gap: 4px; font-size: 13px; }
+.admin-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 5px 0; border-top: 1px solid #dde7f2; }
+.admin-row small { color: #666; } .admin-row .tag { color: #c62828; }
+.admin-row button { border: 1px solid #ccc; background: #fff; border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+#adminRefresh { border: 1px solid #ccc; background: #fff; border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+#adminTemp { user-select: all; -webkit-user-select: all; font-size: 15px; background: #fff3cd; padding: 2px 6px; border-radius: 6px; }
+.must-pw { position: fixed; inset: 0; z-index: 20000; background: #eef2f6; display: grid; place-items: center; }
+.must-pw[hidden] { display: none; }
+.must-card { background: #fff; padding: 22px; border-radius: 14px; box-shadow: 0 6px 24px #0002; width: min(330px, 88vw); }
+.must-card h3 { margin: 0; } #mustLogout { border: 1px solid #ccc; background: #fff; border-radius: 8px; padding: 8px; }

@@ -25,6 +25,9 @@ services:
         sync: false
       - key: ACCOUNTS
         sync: false
+      # 管理员账号的用户名（可选）。先用这个名字注册好账号，再设这个变量；不设则没有管理功能
+      - key: ADMIN_USER
+        sync: false
       - key: GO_API_KEY
         sync: false
       - key: UPSTASH_REDIS_REST_URL

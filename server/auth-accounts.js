@@ -16,6 +16,8 @@ if (accountsOn) setSessionSecret(SECRET);
 
 const COOKIE = 'gta_sess';
 const PUBLIC = /^\/(login|logout|register|healthz|manifest\.webmanifest|sw\.js|icons\/.*)$/;
+// 管理员重置过密码、还没改的账号：只能用这几个接口（页面和静态文件照常加载，前端显示改密码表单）
+const MUST_OK = new Set(['/api/account/me', '/api/account/password', '/api/account/logout']);
 
 export function startAccounts() { if (accountsOn) initAccounts(); }
 
@@ -85,7 +87,7 @@ form[hidden]{display:none}</style></head><body><main>
 <label for="lu">用户名</label><input id="lu" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="${reg ? '' : esc(name)}" required>
 <label for="lp">密码</label><input id="lp" type="password" name="password" autocomplete="current-password" required>
 <button type="submit">登录</button>
-<div class="sw">没有账号？<a href="/login?register=1">用邀请码注册</a></div></form>
+<div class="sw">没有账号？<a href="/login?register=1">用邀请码注册</a></div>${process.env.ADMIN_USER ? '<div class="sw" style="color:#666;font-size:13px">忘记密码？请联系管理员重置。</div>' : ''}</form>
 <form method="post" action="/register" ${reg ? '' : 'hidden'}>
 <p>用户名 3–20 位小写字母、数字或下划线；密码至少 8 位。</p>
 <label for="ri">邀请码</label><input id="ri" type="password" name="invite" autocomplete="off" required>
@@ -152,6 +154,7 @@ export async function handleAccountAuth(req, res, url) {
   const user = verifySession(raw);
   if (user) {
     if (req.method !== 'GET' && req.method !== 'HEAD' && badOrigin(req)) { json(res, 403, { error: 'bad_origin' }); return true; }
+    if (user.mustChange && p.startsWith('/api/') && !MUST_OK.has(p)) { json(res, 403, { error: 'must_change_password' }); return true; }
     req.user = user;
     return false;
   }

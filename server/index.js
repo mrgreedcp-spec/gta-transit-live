@@ -8,10 +8,10 @@ import { handleAuth, authEnabled } from './auth.js';
 import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
 import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule, digestStats,
-  usePushAccounts, acctRules, acctAddRule, acctDeleteRule, acctGetDigest, acctSetDigest, acctUnsubscribe, acctSendTest, acctSendDigestNow, rebindSession } from './push.js';
+  usePushAccounts, acctRules, acctAddRule, acctDeleteRule, acctGetDigest, acctSetDigest, acctUnsubscribe, acctSendTest, acctSendDigestNow, rebindSession, deviceCountByUser } from './push.js';
 import { kvStatus } from './kv.js';
 import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCookie, clearCookies } from './auth-accounts.js';
-import { logout, changePassword, getFavs, setFavs } from './accounts.js';
+import { logout, changePassword, getFavs, setFavs, isAdmin, renameUser, adminList, adminResetPassword } from './accounts.js';
 
 async function readJson(req, limit = 16384) {
   let data = '';
@@ -185,11 +185,29 @@ async function handleApi(url, res, req) {
   const who = clientKey(req);
   const limited = kind => { const wait = take(kind, who); if (!wait) return false; res.setHeader('retry-after', String(wait)); send(res, 429, { error: 'rate_limited', retryAfter: wait }); return true; };
   if (limited('api')) return;
+  // 管理员（ADMIN_USER 指定的账号）。没设 ADMIN_USER、旧模式、不是管理员：一律 404，和不存在的接口一样
+  if (p.startsWith('/api/admin/')) {
+    if (!req.user || !isAdmin(req.user.id)) return send(res, 404, { error: 'not found' });
+    try {
+      if (p === '/api/admin/accounts' && req.method === 'GET') {
+        const list = adminList(req.user.id), counts = deviceCountByUser();
+        return send(res, 200, { ...list, users: list.users.map(u => ({ ...u, devices: counts[u.id] || 0 })) });
+      }
+      if (p === '/api/admin/reset' && req.method === 'POST') {
+        if (limited('write') || limited('login')) return;
+        const b = await readJson(req, 2048);
+        const r = await adminResetPassword(req.user.id, String(b.id || ''));
+        return send(res, 200, { ok: true, ...r });
+      }
+    } catch (e) { return send(res, e.code || 500, { error: e.message }); }
+    return send(res, 404, { error: 'not found' });
+  }
   if (p.startsWith('/api/account/') || p === '/api/favs') {
     if (!req.user) return send(res, 404, { error: 'not found' });   // 旧模式（共享密码）没有账号接口；前端据此判断
     const m = req.method;
     try {
-      if (p === '/api/account/me' && m === 'GET') return send(res, 200, { user: { id: req.user.id, name: req.user.name } });
+      if (p === '/api/account/me' && m === 'GET') return send(res, 200, { user: { id: req.user.id, name: req.user.name,
+        ...(req.user.mustChange ? { mustChange: true } : {}), ...(isAdmin(req.user.id) ? { admin: true } : {}) } });
       if (p === '/api/favs' && m === 'GET') return send(res, 200, getFavs(req.user.id));
       if (m !== 'GET' && limited('write')) return;
       if (p === '/api/favs' && m === 'PUT') { const b = await readJson(req, 32768); return send(res, 200, await setFavs(req.user.id, b.favs, b.base)); }
@@ -204,6 +222,11 @@ async function handleApi(url, res, req) {
         res.setHeader('set-cookie', sessionCookie(req, s.cookie, s.maxAge));
         await rebindSession(req.user.id, req.user.sid, s.cookie.split('.')[2]).catch(() => {});   // cookie: v1.<uid>.<sid>.<exp>.<mac>
         return send(res, 200, { ok: true });
+      }
+      if (p === '/api/account/name' && m === 'POST') {
+        if (limited('login')) return;
+        const b = await readJson(req, 2048);
+        return send(res, 200, { user: await renameUser(req.user.id, b.name, b.password) });   // cookie 里是 uid，不用换
       }
     } catch (e) { return send(res, e.code || 500, e.body || { error: e.message }); }
     return send(res, 404, { error: 'not found' });

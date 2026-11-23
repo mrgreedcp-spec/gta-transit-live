@@ -2,7 +2,8 @@
 // 只在 ACCOUNTS=1 且配置齐全时由 auth-accounts.js 启用。假设：Render 单实例单进程（用户名唯一性靠进程内占位）。
 // Key（kv.js 自动加 gta: 前缀）：
 //   acct:index        = [uid...]
-//   acct:user:<uid>   = { id, name, pw:{ salt, hash, N, r, p }, created, sessions:[{ sid, exp, at }] }
+//   acct:user:<uid>   = { id, name, pw:{ salt, hash, N, r, p }, created, sessions:[{ sid, exp, at }], mustChange? }
+//                       mustChange: 管理员重置过密码，用户改好前只能改密码或登出（旧记录没有这个字段 = false）
 //   acct:data:<uid>   = { favs:[...], rev, rules:[...], digest }   首次写入时才创建
 import crypto from 'node:crypto';
 import { kvGet, kvSet, kvDel } from './kv.js';
@@ -16,6 +17,7 @@ const users = new Map();   // uid -> 用户记录（含密码哈希，不要直�
 const byName = new Map();  // 规范化用户名 -> uid
 const datas = new Map();   // uid -> 账号数据
 const pending = new Set(); // 注册中占位的用户名
+const renaming = new Set(); // 改名中占位的用户名（单独一个集合：注册按 users + pending 判满，不能混用）
 export const acctState = { ready: false, reason: '未载入', users: 0 };
 
 let KEY = null;
@@ -73,7 +75,7 @@ export function verifySession(v) {
   const u = users.get(s.uid);
   const now = Date.now() / 1000;
   if (!u || !u.sessions.some(x => x.sid === s.sid && x.exp > now)) return null;
-  return { id: u.id, name: u.name, sid: s.sid };
+  return { id: u.id, name: u.name, sid: s.sid, ...(u.mustChange ? { mustChange: true } : {}) };
 }
 
 // ---------- 载入 ----------
@@ -94,6 +96,7 @@ export async function initAccounts(attempt = 0) {
     for (const [id, d] of ds) datas.set(id, d);
     Object.assign(acctState, { ready: true, reason: '', users: users.size });
     console.log(`[accounts] 已载入 ${users.size} 个账号`);
+    if (adminName() && !byName.has(adminName())) console.warn(`[accounts] ADMIN_USER=${adminName()} 还没注册：先注册这个账号，否则任何有邀请码的人注册这个名字就成了管理员`);
   } catch (e) {
     const wait = RETRY[Math.min(attempt, RETRY.length - 1)];
     acctState.reason = `存储不可用：${e.message}`;
@@ -122,7 +125,8 @@ function newSession(uid, { expectHash = null, keepOthers = true, pw = null } = {
     if (!u || (expectHash && u.pw.hash !== expectHash)) return null;
     const now = Math.floor(Date.now() / 1000), sid = rand(), exp = now + SESSION_S;
     const sessions = [...(keepOthers ? u.sessions.filter(x => x.exp > now) : []), { sid, exp, at: now }].slice(-MAX_SESSIONS);
-    await saveUser({ ...u, ...(pw ? { pw } : {}), sessions });
+    const { mustChange, ...rest } = u;   // 换了密码就清掉「必须改密码」
+    await saveUser({ ...(pw ? rest : u), ...(pw ? { pw } : {}), sessions });
     return { cookie: signSession(u.id, sid, exp), maxAge: SESSION_S, user: { id: u.id, name: u.name } };
   });
 }
@@ -132,7 +136,7 @@ export async function register({ name: raw, password, invite }) {
   const name = normalizeName(raw);
   if (!name) throw err('bad_username', 400);
   if (!passwordOk(password, name, invite)) throw err('weak_password', 400);
-  if (byName.has(name) || pending.has(name)) throw err('name_taken', 409);
+  if (byName.has(name) || pending.has(name) || renaming.has(name)) throw err('name_taken', 409);
   if (users.size + pending.size >= MAX_USERS) throw err('full', 403);
   pending.add(name);
   try {
@@ -179,11 +183,71 @@ export async function changePassword(uid, oldPw, newPw, invite) {
   const u = users.get(uid);
   if (!u) throw err('login_required', 401);
   if (typeof oldPw !== 'string' || oldPw.length > 128 || !await verifyPassword(oldPw, u.pw)) throw err('bad_password', 401);
-  if (!passwordOk(newPw, u.name, invite)) throw err('weak_password', 400);
+  if (!passwordOk(newPw, u.name, invite) || (u.mustChange && newPw === oldPw)) throw err('weak_password', 400);   // 临时密码管理员知道，不能沿用
   const pw = await hashPassword(newPw);
   const s = await newSession(uid, { expectHash: u.pw.hash, keepOthers: false, pw });   // 其他设备全部下线，当前设备换新 cookie
   if (!s) throw err('bad_password', 409);   // 期间密码已被别处改过
   return s;
+}
+
+// ---------- 管理员、改名、重置密码 ----------
+// ADMIN_USER / NOTIFY_USER 按用户名配置：这两个账号不能改名，别人也不能改成这两个名字（防止冒名拿到权限）
+const adminName = () => normalizeName(process.env.ADMIN_USER || '');
+const reservedNames = () => new Set([adminName(), normalizeName(process.env.NOTIFY_USER || '')].filter(Boolean));
+export const isAdmin = uid => { const a = adminName(); return !!a && users.get(uid)?.name === a; };
+
+export async function renameUser(uid, rawName, password) {
+  needReady();
+  const name = normalizeName(rawName);
+  if (!name) throw err('bad_username', 400);
+  const u = users.get(uid);
+  if (!u) throw err('login_required', 401);
+  if (reservedNames().has(u.name)) throw err('name_locked', 403);
+  if (name === u.name) throw err('same_name', 400);
+  if (typeof password !== 'string' || password.length > 128 || !await verifyPassword(password, u.pw)) throw err('bad_password', 401);
+  if (password.toLowerCase() === name) throw err('weak_password', 400);
+  // 下面三步同步执行（中间没有 await），并发抢同一个名字只有一个能占到
+  if (reservedNames().has(name) || byName.has(name) || pending.has(name) || renaming.has(name)) throw err('name_taken', 409);
+  renaming.add(name);
+  try {
+    return await withLock('u:' + uid, async () => {
+      const cur = users.get(uid);
+      if (!cur || cur.pw.hash !== u.pw.hash) throw err('bad_password', 409);   // 期间密码被改或被重置
+      if (reservedNames().has(cur.name)) throw err('name_locked', 403);
+      const next = { ...cur, name };
+      await kvSet('acct:user:' + uid, next);
+      users.set(uid, next); byName.delete(cur.name); byName.set(name, uid);
+      return { id: uid, name };
+    });
+  } finally { renaming.delete(name); }
+}
+
+export function adminList(actorUid) {
+  if (!isAdmin(actorUid)) throw err('not found', 404);
+  const now = Date.now() / 1000;
+  return { count: users.size, max: MAX_USERS, users: [...users.values()].map(u => ({
+    id: u.id, name: u.name, created: u.created, sessions: u.sessions.filter(x => x.exp > now).length,
+    mustChange: !!u.mustChange, self: u.id === actorUid })) };
+}
+
+// 临时密码：16 位，去掉 0 o 1 i l，按 4 位一组（约 79 bit）
+const TEMP_ABC = 'abcdefghjkmnpqrstuvwxyz23456789';
+const tempPassword = () => Array.from({ length: 4 }, () => Array.from({ length: 4 }, () => TEMP_ABC[crypto.randomInt(TEMP_ABC.length)]).join('')).join('-');
+export async function adminResetPassword(actorUid, targetUid) {
+  needReady();
+  if (!isAdmin(actorUid)) throw err('not found', 404);
+  if (targetUid === actorUid) throw err('cannot_reset_self', 400);
+  if (!users.has(targetUid)) throw err('user_not_found', 404);
+  const temp = tempPassword();
+  const pw = await hashPassword(temp);
+  const name = await withLock('u:' + targetUid, async () => {
+    const cur = users.get(targetUid);
+    if (!cur) throw err('user_not_found', 404);
+    await saveUser({ ...cur, pw, mustChange: true, sessions: [] });   // 所有会话下线；推送设备随会话失效
+    return cur.name;
+  });
+  console.log(`[accounts] 管理员 ${users.get(actorUid)?.name} 重置了 ${name} 的密码`);
+  return { name, tempPassword: temp };
 }
 
 // 这个会话还有效吗（推送用：设备绑定时记下会话，会话失效后设备不再收这个账号的提醒）
@@ -237,4 +301,4 @@ export async function setFavs(uid, favs, base) {
 
 // 测试用
 export const _user = id => users.get(id);
-export function _reset() { users.clear(); byName.clear(); datas.clear(); pending.clear(); Object.assign(acctState, { ready: false, reason: '未载入', users: 0 }); }
+export function _reset() { users.clear(); byName.clear(); datas.clear(); pending.clear(); renaming.clear(); Object.assign(acctState, { ready: false, reason: '未载入', users: 0 }); }

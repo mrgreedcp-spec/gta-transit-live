@@ -739,17 +739,61 @@ async function initAccount(wait = 2000) {
   if (!r || r.status === 503) { setTimeout(() => initAccount(Math.min(wait * 2, 30000)).catch(() => {}), wait); return; }
   if (r.status === 401) { location.href = '/login'; return; }
   if (!r.ok) return;   // 404 = 旧模式
-  window.account = (await r.json()).user;
+  const user = (await r.json()).user;
+  if (user.mustChange) { $('#mustPw').hidden = false; return; }   // 管理员重置过密码：先改密码，其他功能不启用
+  window.account = user;
   document.body.classList.add('acct-mode');
   $('#acctName').textContent = account.name;
   $('#acctBox').hidden = false;
   $('#logout').hidden = true;
   window.dispatchEvent(new Event('account-ready'));
+  if (user.admin) { $('#adminBox').hidden = false; loadAdmin().catch(() => {}); }
 }
-$('#acctLogout').onclick = async () => {
+const acctLogout = async () => {
   try { await fetch('/api/account/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dev: localStorage.getItem('pushDev') }) }); } catch {}
   for (const k of ['favStops', 'favsUid', 'favsRev', 'favsDirty', 'pushDev']) localStorage.removeItem(k);
   location.href = '/login';
+};
+$('#acctLogout').onclick = acctLogout;
+$('#mustLogout').onclick = acctLogout;
+$('#mustForm').onsubmit = async e => {
+  e.preventDefault();
+  const msg = $('#mustMsg'); msg.textContent = '保存中…';
+  const r = await fetch('/api/account/password', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ old: $('#mustOld').value, new: $('#mustNew').value }) }).catch(() => null);
+  if (r?.ok) { location.reload(); return; }   // 重新载入：走正常的 account-ready，推送设备自动绑到新会话
+  const j = await r?.json().catch(() => ({})) || {};
+  msg.textContent = { bad_password: '临时密码不对。', weak_password: '新密码至少 8 位，不能和用户名、邀请码或临时密码相同。', rate_limited: '太频繁了，过几分钟再试。' }[j.error] || '没保存成功，请稍后再试。';
+};
+$('#nameForm').onsubmit = async e => {
+  e.preventDefault();
+  const msg = $('#nameMsg'); msg.textContent = '保存中…';
+  const r = await fetch('/api/account/name', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('#nameNew').value, password: $('#namePw').value }) }).catch(() => null);
+  const j = await r?.json().catch(() => ({})) || {};
+  if (r?.ok) { account.name = j.user.name; $('#acctName').textContent = j.user.name; msg.textContent = '已改好，下次用新用户名登录。'; $('#nameForm').reset(); return; }
+  msg.textContent = { bad_username: '用户名要 3–20 位小写字母、数字或下划线。', bad_password: '密码不对。', name_taken: '这个用户名不能用，换一个。',
+    name_locked: '这个账号的用户名被系统配置使用，不能改。', weak_password: '密码不能和新用户名相同，先改密码。', same_name: '和现在的用户名一样。',
+    rate_limited: '太频繁了，过几分钟再试。' }[j.error] || '没保存成功，请稍后再试。';
+};
+// 管理员：只在打开时和点「刷新」时取，不进轮询
+async function loadAdmin() {
+  const r = await fetch('/api/admin/accounts', { headers: { accept: 'application/json' } });
+  if (!r.ok) return;
+  const j = await r.json();
+  $('#adminCount').textContent = `${j.count} / ${j.max}`;
+  $('#adminList').innerHTML = j.users.map(u => `<div class="admin-row"><span><b>${esc(u.name)}</b>${u.self ? '（你）' : ''}${u.mustChange ? ' <span class="tag">待改密</span>' : ''}<br>
+    <small>${esc(new Date(u.created).toLocaleDateString('zh-CN'))} 注册 · 会话 ${u.sessions} · 设备 ${u.devices}</small></span>
+    ${u.self ? '' : `<button type="button" data-reset="${esc(u.id)}" data-name="${esc(u.name)}">重置密码</button>`}</div>`).join('');
+}
+$('#adminRefresh').onclick = () => { $('#adminMsg').textContent = ''; loadAdmin().catch(() => {}); };
+$('#adminList').onclick = async e => {
+  const b = e.target.closest('button[data-reset]');
+  if (!b || !confirm(`重置 ${b.dataset.name} 的密码？对方的所有设备会立刻退出登录。`)) return;
+  const msg = $('#adminMsg'); msg.textContent = '重置中…';
+  const r = await fetch('/api/admin/reset', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: b.dataset.reset }) }).catch(() => null);
+  const j = await r?.json().catch(() => ({})) || {};
+  if (!r?.ok) { msg.textContent = j.error === 'rate_limited' ? '太频繁了，过几分钟再试。' : '没重置成功。'; return; }
+  msg.innerHTML = `${esc(j.name)} 的临时密码：<code id="adminTemp">${esc(j.tempPassword)}</code><br>只显示这一次，请私下发给对方；对方登录后要马上改密码。`;
+  loadAdmin().catch(() => {});
 };
 $('#pwForm').onsubmit = async e => {
   e.preventDefault();

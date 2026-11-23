@@ -283,6 +283,13 @@ export async function acctSetDigest(uid, input) {
   });
   return next.digest;
 }
+// 每个账号能收提醒的设备数（会话仍有效的），给管理员列表用
+export function deviceCountByUser() {
+  const n = {};
+  for (const d of devices.values()) if (d.userId && sessionAlive(d.userId, d.sid)) n[d.userId] = (n[d.userId] || 0) + 1;
+  return n;
+}
+
 // 改密码后当前设备换了新会话：把绑在旧会话上的设备改绑到新会话，免得这台设备从此收不到提醒
 export async function rebindSession(uid, oldSid, newSid) {
   for (const [id, d] of devices) if (d.userId === uid && d.sid === oldSid) { d.sid = newSid; await saveDevice(id); }
