@@ -63,6 +63,12 @@ button { font: inherit; }
 #panes section.on { display: block; }
 h3 { font-size: 12px; color: #666; margin: 12px 0 4px; }
 .foot { font-size: 11px; color: #999; margin-top: 14px; }
+.guide { margin-top: 14px; border: 1px solid #e3e3e3; border-radius: 10px; padding: 8px 12px; font-size: 14px; line-height: 1.55; }
+.guide summary { font-weight: 600; color: #0a66c2; cursor: pointer; padding: 4px 0; }
+.guide h4 { margin: 12px 0 4px; font-size: 14px; }
+.guide ol, .guide ul { margin: 0; padding-left: 20px; }
+.guide li { margin: 3px 0; }
+.guide.done summary::after { content: "  ✓ 已装好"; color: #2e9e44; font-weight: 400; }
 .sec-head { display: flex; justify-content: space-between; align-items: center; }
 
 .stop-list { list-style: none; margin: 0; padding: 0; }

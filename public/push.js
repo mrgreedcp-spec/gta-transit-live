@@ -4,6 +4,9 @@ const DAY_ZH = ['日', '一', '二', '三', '四', '五', '六'];
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
+// 已经从主屏图标打开：攻略标为已装好；没装的 iPhone 默认展开
+{ const g = document.getElementById('installGuide'); if (g) { if (isStandalone()) g.classList.add('done'); else if (isIOS) g.open = true; } }
+
 function pushSupport() {
   if (!window.isSecureContext) return '推送提醒需要 HTTPS 地址（云端地址或 localhost）。';
   if (isIOS && !isStandalone()) return 'iPhone 需要先把本页「添加到主屏幕」，再从主屏图标打开，才能收推送（iOS 16.4 以上）。步骤：Safari 底部「分享」→「添加到主屏幕」。';
