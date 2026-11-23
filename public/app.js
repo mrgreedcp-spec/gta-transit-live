@@ -811,6 +811,7 @@ async function loadStatus() {
   const r = await api('/api/status');
   for (const id of ['#fbBtn', '#fbLink']) { const b = $(id); if (b) b.hidden = !r.feedback; }   // 服务端没开反馈（或没持久存储）就不显示入口
   document.body.classList.toggle('fb-on', !!r.feedback && !!$('#fbBtn'));
+  const guideLink = $('#guideLink'); if (guideLink) guideLink.hidden = !r.guide;
   agencies = r.agencies;
   $('#agencies').innerHTML = agencies.map(a => {
     const [cls, txt] = stateText(a.vehicles);
@@ -936,13 +937,13 @@ async function tick() {
   tick();
   loadStops().catch(() => {});
   // 从通知点进来：/?tab=favs（每日收藏摘要）或 /?stop=agency:id
-  if (new URLSearchParams(location.search).get('tab') === 'favs') { showTab('favs'); history.replaceState(history.state, '', '/'); }
+  if (new URLSearchParams(location.search).get('tab') === 'favs') { showTab('favs'); history.replaceState(history.state, '', location.pathname); }
   const sp = new URLSearchParams(location.search).get('stop');
   if (sp && sp.includes(':')) {
     const [ag, id] = [sp.slice(0, sp.indexOf(':')), sp.slice(sp.indexOf(':') + 1)];
     api(`/api/stops/search?q=${encodeURIComponent(id)}&agencies=${ag}&limit=5`).then(l => {
       const s = l.find(x => x.id === id) || l[0];
-      history.replaceState(history.state, '', '/'); // 先清 URL，再选站（选站会占一条返回记录）
+      history.replaceState(history.state, '', location.pathname); // 先清 URL，再选站（选站会占一条返回记录）
       if (s) selectStop(s);
     }).catch(() => {});
   }

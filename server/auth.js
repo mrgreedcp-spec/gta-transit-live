@@ -81,7 +81,7 @@ export async function handleAuth(req, res, url) {
     fails.delete(ip);
     const exp = Math.floor(now / 1000) + MAX_AGE;
     const cookie = `${COOKIE}=${exp}.${sign(exp)}; Path=/; Max-Age=${MAX_AGE}; HttpOnly; SameSite=Lax${isHttps(req) ? '; Secure' : ''}`;
-    html(res, 303, '', { location: '/', 'set-cookie': cookie });
+    html(res, 303, '', { location: process.env.SEO_GUIDE === '1' ? '/live' : '/', 'set-cookie': cookie });
     return true;
   }
   if (PUBLIC.test(p) || validCookie(req)) return false;

@@ -2,6 +2,20 @@
 
 多伦多地区（GTA）公交全屏实时地图：车辆位置与晚点、附近站点、收藏站点、站点到站倒计时。可本地运行，也可部署到 Render。个人非官方项目。
 
+## 公开 SEO 指南（新增，可选）
+
+新增 Next.js App Router + TypeScript + Tailwind 指南，在构建时输出静态 HTML，由原有 Node 服务提供。包含 26 个英文/中文页面、成人单次票价计算器、One Fare、TTC/MiWay/GO 指南、三个出行指南、来源和隐私说明，以及 canonical、语言链接、sitemap 和结构化数据。
+
+```bash
+npm ci --include=dev
+npm run build
+SEO_GUIDE=1 npm start
+```
+
+开启后 `/` 是公开指南，原地图在 `/live`，账号、收藏、提醒和 API 继续使用原鉴权。默认不设 `SEO_GUIDE` 时保持旧根路径行为；设置为 `0` 可关闭指南，`/live` 仍可用。PostgreSQL 时刻表模块是可选的，不需要数据库才能展示指南。
+
+**现有 Render 服务需同时核对 Build Command 和环境变量，不能仅凭仓库 YAML 假设已经上线。** 新构建命令为 `npm ci --include=dev && npm run build:render && npm run prefetch`。完整架构、26 个路径、测试、部署和回滚步骤见 [SEO MVP 说明](docs/seo-mvp.md)；数据库接入见 [GTFS / PostgreSQL 说明](db/README.md)。
+
 ## 启动
 
 ```bash

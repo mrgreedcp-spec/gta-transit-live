@@ -1,0 +1,62 @@
+name: SEO guide and PostgreSQL checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seo-guide-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build, SEO, fares and PostgreSQL 16
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: gta_test_only
+          POSTGRES_DB: gta_transit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gta_transit_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      SITE_URL: https://gta-transit-live.onrender.com
+    steps:
+      - name: Check out the proposed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build the Render-compatible static guide
+        run: npm run build:render
+      - name: Check TypeScript
+        run: npm run typecheck
+      - name: Test fare rules and guide logic
+        run: npm run test:guide
+      - name: Test the application and real PostgreSQL imports
+        run: npm test
+        env:
+          # Ephemeral localhost service only. The test additionally requires a
+          # database name ending in _test and creates/drops its own schema.
+          GTFS_TEST_DATABASE_URL: postgresql://postgres:gta_test_only@localhost:5432/gta_transit_test
+      - name: Verify exported SEO documents
+        run: npm run verify:guide

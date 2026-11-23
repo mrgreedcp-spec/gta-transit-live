@@ -4,18 +4,42 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "node scripts/dev-guide.js",
+    "build": "next build web",
+    "build:render": "node scripts/build-guide.js",
+    "verify:guide": "node --test test/seo-export.test.js",
+    "typecheck": "tsc --noEmit -p web/tsconfig.json",
+    "test:guide": "node --import tsx --test web/tests/*.test.ts",
+    "db:migrate": "node scripts/gtfs/migrate.js",
+    "gtfs:import": "node scripts/gtfs/import.js",
+    "gtfs:status": "node scripts/gtfs/export-status.js",
     "start": "NODE_USE_ENV_PROXY=1 node server/index.js",
     "test": "node --test --experimental-test-module-mocks test/*.test.js",
     "phone": "HOST=0.0.0.0 NODE_USE_ENV_PROXY=1 node server/index.js",
     "prefetch": "node --max-old-space-size=200 scripts/prefetch-static.js"
   },
   "dependencies": {
+    "@tailwindcss/postcss": "4.3.5",
+    "csv-parse": "7.0.3",
     "gtfs-realtime-bindings": "^2.2.0",
     "leaflet": "^1.9.4",
+    "next": "16.4.6",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwindcss": "4.3.5",
     "web-push": "^4.0.0",
     "yauzl": "^3.4.0"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
   }
 }
