@@ -111,7 +111,7 @@ async function saveDigest() {
   msg.textContent = '保存中…';
   try {
     const id = on ? await ensureSubscribed() : push.id;
-    if (!id) { msg.textContent = ''; return; }
+    if (!id && !window.account) { msg.textContent = ''; return; }
     const r = await postJson('/api/push/digest', { id, digest: { enabled: on, at: $('#dgAt').value, days, stops: favStops() } });
     push.digest = r.digest;
     $('[data-dgnow]').hidden = !on;
@@ -122,6 +122,7 @@ async function saveDigest() {
 // 收藏增删排序后，把新列表同步到服务器（app.js 的 saveFavs 调用）。连续操作只发最后一次。
 let digestTimer = null;
 function syncDigestStops() {
+  if (window.account) return;   // 账号模式：服务器保存收藏时已同步摘要站点
   if (!push.id || !push.digest?.enabled) return;
   clearTimeout(digestTimer);
   digestTimer = setTimeout(() => postJson('/api/push/digest', { id: push.id, digest: { stops: favStops() } })
@@ -130,9 +131,11 @@ function syncDigestStops() {
 
 function renderPushBox() {
   const box = $('#pushBox');
-  if (pushSupport() && !push.id) { box.innerHTML = ''; return; }
-  if (!push.id && !push.rules.length) { box.innerHTML = digestHtml(); return; }
-  box.innerHTML = digestHtml() + `<h3>🔔 我的到站提醒</h3><ul class="stop-list">${push.rules.map(r => `<li data-rule="${esc(r.id)}">
+  if (pushSupport() && !push.id && !(window.account && push.rules.length)) { box.innerHTML = ''; return; }
+  // 账号里有提醒、但这台设备还没开通知：给个按钮在本设备开通
+  const here = window.account && !push.id && !pushSupport() ? '<div class="remind">这台设备还收不到账号的提醒。<button class="link-btn" data-psub>在这台设备上开启通知</button> <span id="pSubMsg" class="hint"></span></div>' : '';
+  if (!push.id && !push.rules.length) { box.innerHTML = here + digestHtml(); return; }
+  box.innerHTML = here + digestHtml() + `<h3>🔔 我的到站提醒</h3><ul class="stop-list">${push.rules.map(r => `<li data-rule="${esc(r.id)}">
       <span class="tag" style="background:${agColor(r.stop.agency)}">${esc(nameOf(r.stop.agency))}</span>
       <span class="nm"><div>${esc(r.stop.name)}</div><span class="code">${esc(ruleText(r))}</span></span>
       <span class="ops"><button data-op="rdel" aria-label="删除提醒">✕</button></span></li>`).join('') || '<li class="hint">还没有提醒。在到站页点「🔔 提醒我」。</li>'}</ul>
@@ -142,6 +145,10 @@ function renderPushBox() {
 $('#pushBox').addEventListener('change', e => { if (e.target.closest('#dgBox')) saveDigest(); });
 
 $('#pushBox').addEventListener('click', async e => {
+  if (e.target.closest('[data-psub]')) {
+    try { await ensureSubscribed(); renderPushBox(); } catch (err) { $('#pSubMsg').textContent = err.message; }
+    return;
+  }
   if (e.target.closest('[data-dgnow]')) {
     $('#dgMsg').textContent = '发送中…';
     try { await postJson('/api/push/test', { id: push.id, digest: true }); $('#dgMsg').textContent = '已发送，请看通知栏。'; }
@@ -163,8 +170,22 @@ $('#pushBox').addEventListener('click', async e => {
   }
 });
 
+// 账号模式：提醒和摘要存在账号里，不依赖本设备 id。已经授权过通知的设备静默绑定到账号。
+addEventListener('account-ready', async () => {
+  try {
+    await keyReady;
+    if (!pushSupport() && Notification.permission === 'granted') {
+      const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+      if (sub) { const r = await postJson('/api/push/subscribe', { sub: sub.toJSON(), lang: localStorage.getItem('lang') || 'zh' }); push.id = r.id; localStorage.setItem('pushDev', r.id); }
+    }
+    const r = await fetch('/api/push/rules'); if (r.ok) push.rules = await r.json();
+    const g = await fetch('/api/push/digest'); if (g.ok) push.digest = (await g.json()).digest;
+  } catch {}
+  renderPushBox();
+});
+
 // 启动：取公钥和本设备规则
-(async () => {
+const keyReady = (async () => {
   try {
     const k = await api('/api/push/key');
     push.key = k.publicKey; push.enabled = k.enabled; push.reason = k.reason;

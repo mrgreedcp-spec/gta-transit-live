@@ -7,7 +7,8 @@ import zlib from 'node:zlib';
 import { handleAuth, authEnabled } from './auth.js';
 import { plan, geocode, plannerUsage } from './planner.js';
 import { take, clientKey } from './ratelimit.js';
-import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule, digestStats } from './push.js';
+import { initPush, pushState, vapidPublicKey, subscribe, unsubscribe, getRules, addRule, deleteRule, sendTest, notifyAll, getDigest, setDigest, sendDigestNow, digestSchedule, digestStats,
+  usePushAccounts, acctRules, acctAddRule, acctDeleteRule, acctGetDigest, acctSetDigest, acctUnsubscribe, acctSendTest, acctSendDigestNow } from './push.js';
 import { kvStatus } from './kv.js';
 import { accountsOn, accountsWanted, accountsWhyOff, startAccounts, sessionCookie, clearCookies } from './auth-accounts.js';
 import { logout, changePassword, getFavs, setFavs } from './accounts.js';
@@ -192,7 +193,10 @@ async function handleApi(url, res, req) {
       if (p === '/api/favs' && m === 'GET') return send(res, 200, getFavs(req.user.id));
       if (m !== 'GET' && limited('write')) return;
       if (p === '/api/favs' && m === 'PUT') { const b = await readJson(req, 32768); return send(res, 200, await setFavs(req.user.id, b.favs, b.base)); }
-      if (p === '/api/account/logout' && m === 'POST') { await logout(req.user.id, req.user.sid); res.setHeader('set-cookie', clearCookies); return send(res, 200, { ok: true }); }
+      if (p === '/api/account/logout' && m === 'POST') {
+        const b = await readJson(req, 2048).catch(() => ({}));
+        if (typeof b.dev === 'string' && b.dev) await acctUnsubscribe(req.user.id, b.dev).catch(() => {});   // 这台设备不再收这个账号的提醒
+        await logout(req.user.id, req.user.sid); res.setHeader('set-cookie', clearCookies); return send(res, 200, { ok: true }); }
       if (p === '/api/account/password' && m === 'POST') {
         if (limited('login')) return;
         const b = await readJson(req, 2048);
@@ -209,6 +213,18 @@ async function handleApi(url, res, req) {
     try {
       if (p === '/api/push/key') return send(res, 200, { publicKey: vapidPublicKey(), enabled: pushState.enabled, reason: pushState.reason });
       if (m !== 'GET' && limited('write')) return;
+      if (req.user) {   // 账号模式：规则、摘要读写当前账号；设备 id 不再作为归属依据
+        const u = req.user.id;
+        if (p === '/api/push/subscribe' && m === 'POST') { const b = await readJson(req); return send(res, 200, await subscribe(b.sub || {}, b.lang, u)); }
+        if (p === '/api/push/subscribe' && m === 'DELETE') { await acctUnsubscribe(u, q.get('id')); return send(res, 200, { ok: true }); }
+        if (p === '/api/push/rules' && m === 'GET') return send(res, 200, acctRules(u));
+        if (p === '/api/push/rules' && m === 'POST') { const b = await readJson(req); return send(res, 200, await acctAddRule(u, b.rule || {})); }
+        if (p === '/api/push/rules' && m === 'DELETE') { await acctDeleteRule(u, q.get('rule')); return send(res, 200, { ok: true }); }
+        if (p === '/api/push/test' && m === 'POST') { const b = await readJson(req); await (b.digest ? acctSendDigestNow(u) : acctSendTest(u)); return send(res, 200, { ok: true }); }
+        if (p === '/api/push/digest' && m === 'GET') return send(res, 200, { digest: acctGetDigest(u) });
+        if (p === '/api/push/digest' && m === 'POST') { const b = await readJson(req); return send(res, 200, { digest: await acctSetDigest(u, b.digest) }); }
+        return send(res, 404, { error: 'not found' });
+      }
       if (p === '/api/push/subscribe' && m === 'POST') { const b = await readJson(req); return send(res, 200, await subscribe(b.sub || {}, b.lang)); }
       if (p === '/api/push/subscribe' && m === 'DELETE') { await unsubscribe(q.get('id')); return send(res, 200, { ok: true }); }
       if (p === '/api/push/rules' && m === 'GET') { const r = getRules(q.get('id')); return r ? send(res, 200, r) : send(res, 404, { error: 'unknown_device' }); }
@@ -351,6 +367,7 @@ http.createServer(async (req, res) => {
 });
 
 startAccounts();
+usePushAccounts(accountsOn);
 
 // 推送提醒：用和到站接口相同的逻辑取到站
 initPush(async (agency, stopId) => (await apiArrivals(agency, stopId, { limit: 15, maxWaitMs: 8000 }))[1].arrivals || [])

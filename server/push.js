@@ -9,6 +9,12 @@ import path from 'node:path';
 import * as webpush from 'web-push';
 import { kvGet, kvSet, kvDel, kvPersistent } from './kv.js';
 import { digestDue, digestLastCall, buildDigest, cleanDigest } from './digest.js';
+import { getData, saveData, uidByName } from './accounts.js';
+
+// 账号模式（index.js 在 ACCOUNTS 生效时打开）：设备带 userId 的，提醒规则和摘要存在账号里（acct:data:<uid>），
+// 发到该账号的全部设备；没认领的设备照旧用自己的规则。关闭时完全按设备（与改动前一致），设备上保留的是认领那一刻的快照。
+let acctMode = false;
+export function usePushAccounts(on) { acctMode = !!on; }
 
 const MAX_DEVICES = 300, MAX_RULES = 10;
 const ALLOWED_HOSTS = /(^|\.)(fcm\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com|android\.googleapis\.com)$/;
@@ -69,16 +75,37 @@ function validSub(sub) {
   } catch { return false; }
 }
 
-export async function subscribe(sub, lang) {
+export async function subscribe(sub, lang, userId = null) {
   if (!ready) throw Object.assign(new Error(pushState.reason || 'push_disabled'), { code: 503 });
   if (!validSub(sub)) throw Object.assign(new Error('invalid_subscription'), { code: 400 });
   const id = devId(sub.endpoint);
   const old = devices.get(id);
   if (!old && devices.size >= MAX_DEVICES) throw Object.assign(new Error('too_many_devices'), { code: 429 });
-  devices.set(id, { sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now(), digest: old?.digest });
+  if (userId) return claimDevice(id, old, sub, lang, userId);
+  devices.set(id, { sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now(), digest: old?.digest, ...(old?.userId ? { userId: old.userId } : {}) });
   await saveDevice(id);
   if (!old) await saveIndex();
   return { id, rules: devices.get(id).rules };
+}
+
+// 账号模式下订阅 = 把这台设备绑到当前账号。第一次绑定时把设备上原有的规则、摘要复制进账号（按内容去重），设备上的原数据保留不删。
+const ruleSig = r => JSON.stringify([r.stop?.agency, r.stop?.id, r.route, r.lead, r.days, r.from, r.to, r.once]);
+async function claimDevice(id, old, sub, lang, userId) {
+  const keys = { p256dh: sub.keys.p256dh, auth: sub.keys.auth };
+  const same = old && old.userId === userId && old.lang === (lang || 'zh') && old.sub.keys.p256dh === keys.p256dh && old.sub.keys.auth === keys.auth;
+  if (!same) {
+    if (old && !old.userId) {   // 只认领从没绑过账号的设备的旧数据；换账号登录不把别人的规则带过来
+      const data = getData(userId);
+      const rules = [...(data.rules || [])], have = new Set(rules.map(ruleSig));
+      for (const r of old.rules || []) if (rules.length < MAX_RULES && !have.has(ruleSig(r))) { rules.push({ ...r }); have.add(ruleSig(r)); }
+      const digest = data.digest || (old.digest ? { ...old.digest } : null);
+      if (rules.length !== (data.rules || []).length || digest !== data.digest) await saveData(userId, { ...data, rules, digest });
+    }
+    devices.set(id, { sub: { endpoint: sub.endpoint, keys }, rules: old?.rules || [], lang: lang || 'zh', created: old?.created || Date.now(), digest: old?.digest, userId });
+    await saveDevice(id);
+    if (!old) await saveIndex();
+  }
+  return { id, rules: getData(userId).rules || [] };
 }
 
 export async function unsubscribe(id) {
@@ -100,13 +127,16 @@ export function getDigest(id) {
 export async function setDigest(id, input) {
   const d = devices.get(id);
   if (!d) throw Object.assign(new Error('unknown_device'), { code: 404 });
-  const dg = cleanDigest(input || {}, d.digest);
+  d.digest = applyDigest(d.digest, input);
+  await saveDevice(id);
+  return d.digest;
+}
+function applyDigest(old, input) {
+  const dg = cleanDigest(input || {}, old);
   if (!dg) throw Object.assign(new Error('invalid_digest'), { code: 400 });
   // 改了时间或刚打开：今天已过点就从明天开始，免得一保存就推
   const t = torontoNow();
   if ((input?.at || input?.enabled) && t.hm > dg.at) dg.lastDate = t.date;
-  d.digest = dg;
-  await saveDevice(id);
   return dg;
 }
 
@@ -114,8 +144,7 @@ export async function setDigest(id, input) {
 export function digestSchedule() {
   if (!ready) throw Object.assign(new Error(pushState.reason || 'push_disabled'), { code: 503 });
   const seen = new Map();
-  for (const d of devices.values()) {
-    const g = d.digest;
+  for (const { digest: g } of targets()) {
     if (g?.enabled && g.stops?.length) seen.set(`${g.at}|${g.days.join(',')}`, { at: g.at, days: [...g.days] });
   }
   return [...seen.values()].sort((x, y) => (x.at + x.days).localeCompare(y.at + y.days));
@@ -123,7 +152,7 @@ export function digestSchedule() {
 
 // 只给计数，排查用：设备数、有摘要设置的、已开启的、已开启且有收藏站的
 export function digestStats() {
-  const all = [...devices.values()].map(d => d.digest).filter(Boolean);
+  const all = targets().map(x => x.digest).filter(Boolean);
   return { devices: devices.size, digests: all.length, enabled: all.filter(g => g.enabled).length,
     ready: all.filter(g => g.enabled && g.stops?.length).length };
 }
@@ -144,14 +173,14 @@ export async function sendDigestNow(id) {
 }
 
 async function checkDigests(t) {
-  for (const [id, d] of devices) {
-    const dg = d.digest;
+  for (const x of targets()) {
+    const dg = x.digest;
     if (!digestDue(dg, t)) continue;
     const m = await digestPayload(dg);
     if (m.empty && !digestLastCall(dg, t)) continue; // 刚唤醒、实时数据还没到：下一轮再试
-    if (await send(id, { title: m.title, body: m.body, tag: 'digest', url: '/?tab=favs' }, 1800)) {
+    if (await sendTo(x.devIds, { title: m.title, body: m.body, tag: 'digest', url: '/?tab=favs' }, 1800)) {
       dg.lastDate = t.date;
-      await saveDevice(id);
+      await x.save();
     }
   }
 }
@@ -161,6 +190,12 @@ export async function addRule(id, r) {
   const d = devices.get(id);
   if (!d) throw Object.assign(new Error('unknown_device'), { code: 404 });
   if (d.rules.length >= MAX_RULES) throw Object.assign(new Error('too_many_rules'), { code: 429 });
+  const rule = makeRule(r);
+  d.rules.push(rule);
+  await saveDevice(id);
+  return rule;
+}
+function makeRule(r) {
   const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
   const rule = {
     id: crypto.randomBytes(6).toString('base64url'),
@@ -172,8 +207,6 @@ export async function addRule(id, r) {
     once: !!r.once, enabled: true,
   };
   if (!rule.stop.agency || !rule.stop.id || !rule.days.length) throw Object.assign(new Error('invalid_rule'), { code: 400 });
-  d.rules.push(rule);
-  await saveDevice(id);
   return rule;
 }
 
@@ -201,6 +234,64 @@ async function send(id, payload, ttl = 120) {
   }
 }
 
+// 发给一组设备，返回成功台数
+async function sendTo(ids, payload, ttl) { let n = 0; for (const id of ids) if (await send(id, payload, ttl)) n++; return n; }
+
+// 推送对象：没认领（或账号模式关闭）的设备 = 自己；账号模式下认领了的设备按账号合并，规则和摘要取账号的
+function targets() {
+  const out = [], byUser = new Map();
+  for (const [id, d] of devices) {
+    if (acctMode && d.userId) { if (!byUser.has(d.userId)) byUser.set(d.userId, []); byUser.get(d.userId).push(id); continue; }
+    out.push({ key: id, rules: d.rules, digest: d.digest, devIds: [id], lang: d.lang, save: () => saveDevice(id) });
+  }
+  for (const [uid, ids] of byUser) {
+    const data = getData(uid);
+    out.push({ key: 'u:' + uid, rules: data.rules || [], digest: data.digest, devIds: ids, lang: devices.get(ids[0]).lang, save: () => saveData(uid, data) });
+  }
+  return out;
+}
+
+// ---------- 账号模式：按账号读写规则和摘要（index.js 在 req.user 存在时调用） ----------
+const devsOf = uid => [...devices].filter(([, d]) => d.userId === uid).map(([id]) => id);
+export const acctRules = uid => getData(uid).rules || [];
+export async function acctAddRule(uid, r) {
+  const data = getData(uid), rules = data.rules || [];
+  if (rules.length >= MAX_RULES) throw Object.assign(new Error('too_many_rules'), { code: 429 });
+  const rule = makeRule(r);
+  await saveData(uid, { ...data, rules: [...rules, rule] });
+  return rule;
+}
+export async function acctDeleteRule(uid, ruleId) {
+  const data = getData(uid);
+  await saveData(uid, { ...data, rules: (data.rules || []).filter(r => r.id !== ruleId) });
+}
+export const acctGetDigest = uid => getData(uid).digest || null;
+export async function acctSetDigest(uid, input) {
+  const data = getData(uid);
+  // 账号模式下摘要站点总是取账号收藏（单一来源；保存收藏时 accounts.setFavs 也会同步）
+  const stops = (data.favs || []).map(f => ({ agency: f.agency, id: f.id, name: f.name }));
+  const digest = applyDigest(data.digest, { ...(input || {}), stops });
+  await saveData(uid, { ...data, digest });
+  return digest;
+}
+export async function acctUnsubscribe(uid, id) {
+  if (devices.get(id)?.userId !== uid) throw Object.assign(new Error('unknown_device'), { code: 404 });
+  await unsubscribe(id);
+}
+export async function acctSendTest(uid) {
+  const ids = devsOf(uid);
+  if (!ids.length) throw Object.assign(new Error('no_device'), { code: 404 });
+  if (!await sendTo(ids, { title: 'GTA 公交实时', body: '测试通知：推送提醒已开通 ✅', tag: 'test' })) throw Object.assign(new Error(pushState.lastError || 'send_failed'), { code: 502 });
+  return ids.length;
+}
+export async function acctSendDigestNow(uid) {
+  const dg = getData(uid).digest, ids = devsOf(uid);
+  if (!dg?.stops?.length) throw Object.assign(new Error('no_favorites'), { code: 400 });
+  if (!ids.length) throw Object.assign(new Error('no_device'), { code: 404 });
+  const m = await digestPayload(dg);
+  if (!await sendTo(ids, { title: m.title, body: m.body, tag: 'digest', url: '/?tab=favs' }, 1800)) throw Object.assign(new Error(pushState.lastError || 'send_failed'), { code: 502 });
+}
+
 export async function sendTest(id) {
   if (!devices.has(id)) throw Object.assign(new Error('unknown_device'), { code: 404 });
   const zh = devices.get(id).lang !== 'en';
@@ -215,10 +306,12 @@ export async function notifyAll({ title, body, tag, key }) {
   const now = Date.now();
   for (const [k, t] of notified) if (now - t > 6 * 3600e3) notified.delete(k);
   if (key && notified.has(key)) return { devices: devices.size, sent: 0, duplicate: true };
-  let sent = 0;
-  for (const id of [...devices.keys()]) if (await send(id, { title, body, tag, url: '/' }, 1800)) sent++;
+  // 账号模式下设了 NOTIFY_USER（用户名）：只发给这个账号的设备（Mac 的通勤提醒只给本人）
+  const only = acctMode && process.env.NOTIFY_USER ? uidByName(process.env.NOTIFY_USER) : null;
+  const ids = only ? devsOf(only) : [...devices.keys()];
+  const sent = await sendTo(ids, { title, body, tag, url: '/' }, 1800);
   if (key && sent) notified.set(key, now);
-  return { devices: devices.size, sent };
+  return { devices: ids.length, sent };
 }
 
 // ---------- 定时检查 ----------
@@ -237,29 +330,29 @@ async function check() {
   const t = torontoNow();
   try { await checkDigests(t); } catch (e) { pushState.lastError = `digest: ${e.message}`; }
   const active = [];
-  for (const [id, d] of devices) for (const r of d.rules) if (inWindow(r, t)) active.push([id, d, r]);
+  for (const x of targets()) for (const r of x.rules) if (inWindow(r, t)) active.push([x, r]);
   if (!active.length) return; // 没有生效的规则就不拉任何数据
   const byStop = new Map();
-  for (const [, , r] of active) byStop.set(`${r.stop.agency}:${r.stop.id}`, r.stop);
+  for (const [, r] of active) byStop.set(`${r.stop.agency}:${r.stop.id}`, r.stop);
   const arrivals = new Map();
   for (const [key, s] of byStop) {
     try { arrivals.set(key, await arrivalsFn(s.agency, s.id)); } catch { arrivals.set(key, []); }
   }
   const nowS = Math.floor(now / 1000);
-  for (const [id, d, r] of active) {
+  for (const [x, r] of active) {
     const list = arrivals.get(`${r.stop.agency}:${r.stop.id}`) || [];
     const hit = list.find(a => (!r.route || String(a.routeShort).toLowerCase() === r.route.toLowerCase())
       && a.time - nowS <= r.lead * 60 && a.time - nowS >= -30);
     if (!hit) continue;
-    const key = `${id}:${r.id}:${hit.tripId || hit.time}`;
+    const key = `${x.key}:${r.id}:${hit.tripId || hit.time}`;
     if (fired.has(key)) continue;
     fired.set(key, now);
     const min = Math.max(0, Math.round((hit.time - nowS) / 60));
-    const zh = d.lang !== 'en';
+    const zh = x.lang !== 'en';
     const body = zh
       ? `${hit.routeShort} 路${hit.headsign ? `（${hit.headsign}）` : ''}${min <= 0 ? '即将到站' : ` ${min} 分钟后到站`}`
       : `Route ${hit.routeShort}${hit.headsign ? ` (${hit.headsign})` : ''} ${min <= 0 ? 'arriving now' : `in ${min} min`}`;
-    await send(id, { title: r.stop.name, body, tag: `r-${r.id}`, url: `/?stop=${encodeURIComponent(`${r.stop.agency}:${r.stop.id}`)}` });
-    if (r.once) { r.enabled = false; await saveDevice(id); }
+    await sendTo(x.devIds, { title: r.stop.name, body, tag: `r-${r.id}`, url: `/?stop=${encodeURIComponent(`${r.stop.agency}:${r.stop.id}`)}` });
+    if (r.once) { r.enabled = false; await x.save(); }   // 与原逻辑一致：尝试推过就停用
   }
 }
